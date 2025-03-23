@@ -127,8 +127,11 @@ if page == "Range Finder":
         if risk_filter != "All":
             filtered = filtered[filtered["Risk_Level"] == risk_filter]
 
-        # Remove Totals rows with case-agnostic filter
-        filtered = filtered[~filtered["Instrument"].astype(str).str.strip().str.lower().eq("totals")]
+        # Remove any rows where 'Totals' appears in Instrument or DayOfWeek
+        filtered = filtered[
+            ~filtered["Instrument"].astype(str).str.strip().str.lower().eq("totals") &
+            ~filtered["DayOfWeek"].astype(str).str.strip().str.lower().eq("totals")
+        ]
 
         # Apply color grading to Reward/Risk Ratio
         def color_rr(val):
