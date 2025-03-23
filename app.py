@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("🧠 TBR Dashboard")
+st.title("🧠 The Playbook")
 
 # Page Navigation
 page = st.sidebar.radio("Select Page", ["Range Finder", "DCA Risk Calculator"])
@@ -17,7 +17,7 @@ if page == "Range Finder":
     st.header("📊 Range Finder")
 
     st.sidebar.header("📂 CSV File Upload")
-    num_instruments = st.sidebar.number_input("Number of Instruments", 1, 10, 1)
+    num_instruments = st.sidebar.number_input("Number of Instruments", 1, 20, 1)
     timeframes = ["1 Year", "6 Months", "3 Months", "1 Month"]
 
     instrument_data = {}
@@ -35,7 +35,7 @@ if page == "Range Finder":
                         df.rename(columns={"Date": "DayOfWeek"}, inplace=True)
                     instrument_data[instrument_name][tf] = df
 
-    st.subheader("📖 Refined Table View")
+    st.subheader("📖 Playbook")
     min_strike = st.number_input("Min Strike Rate", 0, 100, 75)
     risk_filter = st.radio("Risk Filter", ["All", "Low", "Moderate", "High"], horizontal=True)
     combined = []
