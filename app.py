@@ -1,42 +1,47 @@
-# -----start section 1-----
-# RANGE FINDER + DCA DASHBOARD SETUP
+# -----start section 1 - Setup & Page Navigation-----
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 
 st.set_page_config(layout="wide")
-st.sidebar.title("🧭 Navigation")
+st.title("🧠 TBR Dashboard")
+
+# Page Navigation
 page = st.sidebar.radio("Select Page", ["Range Finder", "DCA Risk Calculator"])
-# -----end section 1-----
-# -----start section 2-----
-# RANGE FINDER: CSV UPLOADS + DATA PREP
+
+# -----end section 1 - Setup & Page Navigation-----
+# -----start section 2 - Range Finder Uploads + Filters-----
 
 if page == "Range Finder":
-    st.title("📊 Range Finder")
+    st.header("📊 Range Finder")
 
-    num_instruments = st.sidebar.number_input("Number of Instruments", 1, 20, 1)
+    st.sidebar.header("📂 CSV File Upload")
+    num_instruments = st.sidebar.number_input("Number of Instruments", 1, 10, 1)
     timeframes = ["1 Year", "6 Months", "3 Months", "1 Month"]
+
     instrument_data = {}
 
     for i in range(1, num_instruments + 1):
         with st.sidebar.expander(f"Instrument {i}"):
-            name = st.text_input(f"Rename Instrument {i}", f"Instrument_{i}")
-            instrument_data[name] = {}
+            instrument_name = st.text_input(f"Name for Instrument {i}", value=f"Instrument_{i}")
+            instrument_data[instrument_name] = {}
+
             for tf in timeframes:
-                uploaded = st.file_uploader(f"{name} - {tf}", type="csv", key=f"{name}_{tf}")
+                uploaded = st.file_uploader(f"{instrument_name} - {tf}", type="csv", key=f"{instrument_name}_{tf}")
                 if uploaded:
                     df = pd.read_csv(uploaded)
-                    expected_cols = ["DayOfWeek", "RangeStart", "RangeEnd", "StrikeRate", "AvgMAE", "AvgMFE", "AvgRangePerc"]
-                    df = df[[col for col in expected_cols if col in df.columns]]
-                    instrument_data[name][tf] = df
-# -----end section 2-----
-# -----start section 3-----
-# RANGE FINDER: METRICS, RISK SCORE, RECOMMENDED MFE
+                    if "Date" in df.columns:
+                        df.rename(columns={"Date": "DayOfWeek"}, inplace=True)
+                    instrument_data[instrument_name][tf] = df
 
     st.subheader("📖 Refined Table View")
     min_strike = st.number_input("Min Strike Rate", 0, 100, 75)
     risk_filter = st.radio("Risk Filter", ["All", "Low", "Moderate", "High"], horizontal=True)
     combined = []
+
+# -----end section 2 - Range Finder Uploads + Filters-----
+# -----start section 3 - Range Finder Core Logic (Merging, Metrics, Risk Score)-----
 
     for instrument, data in instrument_data.items():
         if all(tf in data for tf in timeframes):
@@ -52,97 +57,105 @@ if page == "Range Finder":
             }
 
             for tf, cols in rename_map.items():
-                df = df.merge(data[tf].rename(columns=cols), on=["DayOfWeek", "RangeStart", "RangeEnd"], how="left")
+                df_temp = data[tf].rename(columns=cols)
 
-            weights = {"1M": 0.1, "3M": 0.2, "6M": 0.3, "1Y": 0.4}
-            df["Weighted_Strike"] = sum(df[f"Strike_{k}"] * w for k, w in weights.items())
-            df["Weighted_MAE"] = sum(df[f"MAE_{k}"] * w for k, w in weights.items())
-            df["Weighted_MFE"] = sum(df[f"MFE_{k}"] * w for k, w in weights.items())
-            df["Weighted_MFE_to_MAE"] = df["Weighted_MFE"] / df["Weighted_MAE"]
+                # Keep only required columns: key join columns + renamed metric columns
+                required = ["DayOfWeek", "RangeStart", "RangeEnd"] + list(cols.values())
+                df_temp = df_temp.loc[:, required]
+
+                df = df.merge(df_temp, on=["DayOfWeek", "RangeStart", "RangeEnd"], how="left")
+
+            weights_strike = {"1M": 0.1, "3M": 0.2, "6M": 0.3, "1Y": 0.4}
+            weights_mfe_mae = {"1M": 0.4, "3M": 0.3, "6M": 0.2, "1Y": 0.1}
+
+            df["Weighted_Strike"] = sum(df[f"Strike_{k}"] * w for k, w in weights_strike.items())
+            df["Weighted_MAE"] = sum(df[f"MAE_{k}"] * w for k, w in weights_mfe_mae.items())
+            df["Weighted_MFE"] = sum(df[f"MFE_{k}"] * w for k, w in weights_mfe_mae.items())
+
+            df["Reward/Risk Ratio"] = df["Weighted_MFE"] / df["Weighted_MAE"]
+            df["Reward/Risk Ratio"] = df["Reward/Risk Ratio"].replace([np.inf, -np.inf], np.nan).fillna(0)
 
             df["Risk_Score"] = sum(
-                (df[f"MAE_{k}"] / df[f"Range_{k}"]) * 100 * w for k, w in weights.items()
+                (df[f"MAE_{k}"] / df[f"Range_{k}"]) * 100 * weights_strike[k] for k in weights_strike
             )
             df["Risk_Level"] = df["Risk_Score"].apply(lambda x: "Low" if x < 80 else "Moderate" if x <= 120 else "High")
 
-            for k in ["1M", "3M", "6M", "1Y"]:
-                df[f"Ratio_{k}"] = df[f"MFE_{k}"] / df[f"MAE_{k}"]
-
-            def pick_mfe(row):
-                candidates = []
-                for k in ["1M", "3M", "6M", "1Y"]:
-                    if row[f"Ratio_{k}"] >= 1.5 and row[f"Strike_{k}"] >= 70:
-                        candidates.append((k, row[f"Strike_{k}"], row[f"MFE_{k}"]))
-                if not candidates:
-                    return f"{round(row['Weighted_MFE'], 3)}% (Weighted)"
-                best = sorted(candidates, key=lambda x: (-x[1], -x[2]))[0]
-                return f"{round(best[2], 3)}% ({best[0]})"
-
-            df["Recommended_MFE"] = df.apply(pick_mfe, axis=1)
-# -----end section 3-----
-# -----start section 4-----
-# RANGE FINDER: TARGET ZONE, MAE QUALITY, TABLE FINALIZATION
-
-            def target_zone(row):
-                valid = [row[f"MFE_{k}"] for k in ["1M", "3M", "6M", "1Y"] if row[f"Ratio_{k}"] >= 1.5]
-                if not valid:
-                    return f"{round(row['Weighted_MFE'], 3)}%"
-                return f"{round(min(valid), 3)}% – {round(max(valid), 3)}%"
-
-            df["MFE_Target_Zone"] = df.apply(target_zone, axis=1)
-            df["MAE_Threshold"] = df["Range_1M"] * 2.5
-
-            def mae_grade(x):
-                if x >= 1.8: return "Excellent"
-                elif x >= 1.3: return "Tradable"
-                elif x >= 1.0: return "Unreliable"
-                else: return "Fail"
-
-            df["MAE_Quality"] = df["Weighted_MFE_to_MAE"].apply(mae_grade)
-            df.insert(0, "Instrument", instrument)
+            df["Instrument"] = instrument
             combined.append(df)
-# -----end section 4-----
-# -----start section 5-----
-# RANGE FINDER: FILTERED TABLE VIEW WITH TOOLTIP EXPANDER
+
+# -----end section 3 - Range Finder Core Logic (Merging, Metrics, Risk Score)-----
+
+# -----start section 4 - Range Finder Display + Tooltip + Color Grading-----
 
     if combined:
         final_df = pd.concat(combined).reset_index(drop=True)
 
-        st.markdown("### Refined Range Table")
-
-        with st.expander("ℹ️ Column Guide"):
+        with st.expander("ℹ️ Column Guide & Metric Logic"):
             st.markdown("""
-            - **Weighted_Strike**: Weighted strike rate from 1Y (40%) to 1M (10%).
-            - **Recommended MFE**: Best-performing timeframe with high MFE/MAE ratio and strike rate.
-            - **Target Zone**: MFE range (min to max) from qualifying timeframes.
-            - **Weighted MAE**: Avg downside (risk) across all timeframes.
-            - **MAE Quality**:
-                - Excellent ≥ 1.8
-                - Tradable 1.3–1.79
-                - Unreliable 1.0–1.29
-                - Fail < 1.0
-            - **Risk Level**: Based on MAE relative to range size.
-            """)
+### **Metric Definitions & Calculation Logic**
 
-        table_cols = [
+**Weighted Strike Rate**  
+> Combines strike rate from all timeframes using:  
+`(1Y × 40%) + (6M × 30%) + (3M × 20%) + (1M × 10%)`
+
+**Weighted MFE & MAE**  
+> Use recency-weighted logic to reflect current market behavior:  
+`(1M = 40%, 3M = 30%, 6M = 20%, 1Y = 10%)`
+
+**Reward/Risk Ratio**  
+> `Weighted MFE ÷ Weighted MAE`  
+- ≥ 1.80: Excellent (green)  
+- 1.30–1.79: Tradable (yellow)  
+- 1.00–1.29: Unreliable (orange)  
+- < 1.00: Fail (red)
+
+**Risk Level**  
+> Based on drawdown vs. range (%):  
+- Low: < 80  
+- Moderate: 80–120  
+- High: > 120
+""")
+
+        st.markdown("### 📊 Combined Refined Table (All Instruments)")
+        display_cols = [
             "Instrument", "DayOfWeek", "RangeStart", "RangeEnd",
-            "Weighted_Strike", "Recommended_MFE", "MFE_Target_Zone",
-            "Weighted_MAE", "MAE_Quality", "Risk_Level"
+            "Weighted_Strike", "Weighted_MFE", "Weighted_MAE",
+            "Reward/Risk Ratio", "Risk_Level"
         ]
 
-        df_filtered = final_df[final_df["Weighted_Strike"] >= min_strike]
+        filtered = final_df[final_df["Weighted_Strike"] >= min_strike]
         if risk_filter != "All":
-            df_filtered = df_filtered[df_filtered["Risk_Level"] == risk_filter]
+            filtered = filtered[filtered["Risk_Level"] == risk_filter]
+        filtered = filtered[filtered["Instrument"] != "Totals"]
 
-        # Remove "Totals" row if present
-        df_filtered = df_filtered[df_filtered["Instrument"] != "Totals"]
+        def color_rr(val):
+            try:
+                val = float(val)
+                if val >= 1.80:
+                    return "background-color: #4caf50;"  # Green
+                elif val >= 1.30:
+                    return "background-color: #fbc02d;"  # Yellow-Gold
+                elif val >= 1.00:
+                    return "background-color: #ff9800;"  # Orange
+                else:
+                    return "background-color: #f44336;"  # Red
+            except:
+                return ""
 
-        st.dataframe(df_filtered[table_cols].sort_values("Weighted_Strike", ascending=False), use_container_width=True)
+        styled_combined = filtered[display_cols].style.applymap(color_rr, subset=["Reward/Risk Ratio"])
+        st.dataframe(styled_combined, use_container_width=True)
+
+        st.markdown("### 📈 Individual Instrument Tables")
+        for inst in filtered["Instrument"].unique():
+            inst_df = filtered[filtered["Instrument"] == inst]
+            st.markdown(f"#### {inst}")
+            st.dataframe(inst_df[display_cols].style.applymap(color_rr, subset=["Reward/Risk Ratio"]), use_container_width=True)
+
     else:
-        st.info("Upload valid CSVs for all 4 timeframes to begin analysis.")
-# -----end section 5-----
-# -----start section 6-----
-# DCA CALCULATOR: UI, BLENDED ENTRY, AND SUMMARY TABLE
+        st.info("📥 Please upload all 4 timeframes for at least one instrument to begin analysis.")
+
+# -----end section 4 - Range Finder Display + Tooltip + Color Grading-----
+# -----start section 5 - DCA CALCULATOR: UI, BLENDED ENTRY, AND SUMMARY TABLE-----
 
 elif page == "DCA Risk Calculator":
     st.title("📐 DCA Risk Calculator")
@@ -197,9 +210,9 @@ elif page == "DCA Risk Calculator":
 
     st.subheader("📊 DCA Summary")
     st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
-# -----end section 6-----
-# -----start section 7-----
-# DCA CALCULATOR: RISK/REWARD TABLE
+
+# -----end section 5 - DCA CALCULATOR: UI, BLENDED ENTRY, AND SUMMARY TABLE-----
+# -----start section 6 - DCA CALCULATOR: RISK/REWARD TABLE-----
 
     results = []
     for mfe in [mfe_1, mfe_2]:
@@ -220,4 +233,5 @@ elif page == "DCA Risk Calculator":
         st.subheader("📈 Risk/Reward Table")
         rr_df = pd.DataFrame(results)[["Profit $", "Dollar Risk", "RR", "MFE %", "Max MAE %"]]
         st.dataframe(rr_df, use_container_width=True)
-# -----end section 7-----
+
+# -----end section 6 - DCA CALCULATOR: RISK/REWARD TABLE-----
