@@ -84,7 +84,6 @@ if page == "Range Finder":
             combined.append(df)
 
 # -----end section 3 - Range Finder Core Logic (Merging, Metrics, Risk Score)-----
-
 # -----start section 4 - Range Finder Display + Tooltip + Color Grading-----
 
     if combined:
@@ -125,12 +124,13 @@ if page == "Range Finder":
 
         filtered = final_df[final_df["Weighted_Strike"] >= min_strike]
 
-if risk_filter != "All":
-    filtered = filtered[filtered["Risk_Level"] == risk_filter]
+        if risk_filter != "All":
+            filtered = filtered[filtered["Risk_Level"] == risk_filter]
 
-# Exclude "Totals" rows with case/space safety
-filtered = filtered[~filtered["Instrument"].astype(str).str.strip().str.lower().eq("totals")]
+        # Remove Totals rows with case-agnostic filter
+        filtered = filtered[~filtered["Instrument"].astype(str).str.strip().str.lower().eq("totals")]
 
+        # Apply color grading to Reward/Risk Ratio
         def color_rr(val):
             try:
                 val = float(val)
@@ -152,7 +152,8 @@ filtered = filtered[~filtered["Instrument"].astype(str).str.strip().str.lower().
         for inst in filtered["Instrument"].unique():
             inst_df = filtered[filtered["Instrument"] == inst]
             st.markdown(f"#### {inst}")
-            st.dataframe(inst_df[display_cols].style.applymap(color_rr, subset=["Reward/Risk Ratio"]), use_container_width=True)
+            styled_inst = inst_df[display_cols].style.applymap(color_rr, subset=["Reward/Risk Ratio"])
+            st.dataframe(styled_inst, use_container_width=True)
 
     else:
         st.info("📥 Please upload all 4 timeframes for at least one instrument to begin analysis.")
