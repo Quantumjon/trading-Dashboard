@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("🧠 The Playbook")
+
 
 # Page Navigation
 page = st.sidebar.radio("Select Page", ["Range Finder", "DCA Risk Calculator"])
@@ -35,7 +35,7 @@ if page == "Range Finder":
                         df.rename(columns={"Date": "DayOfWeek"}, inplace=True)
                     instrument_data[instrument_name][tf] = df
 
-    st.subheader("📖 Playbook")
+    
     min_strike = st.number_input("Min Strike Rate", 0, 100, 75)
     risk_filter = st.radio("Risk Filter", ["All", "Low", "Moderate", "High"], horizontal=True)
     combined = []
