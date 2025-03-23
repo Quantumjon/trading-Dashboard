@@ -14,7 +14,7 @@ page = st.sidebar.radio("Select Page", ["Range Finder", "DCA Risk Calculator"])
 # -----start section 2 - Range Finder Uploads + Filters-----
 
 if page == "Range Finder":
-    st.header("📊 Range Finder")
+    st.header("📊 Playbook")
 
     st.sidebar.header("📂 CSV File Upload")
     num_instruments = st.sidebar.number_input("Number of Instruments", 1, 20, 1)
