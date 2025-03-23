@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("🧠 TBR Dashboard")
+st.title("🧠 The Playbook")
 
 # Page Navigation
 page = st.sidebar.radio("Select Page", ["Range Finder", "DCA Risk Calculator"])
@@ -124,9 +124,12 @@ if page == "Range Finder":
         ]
 
         filtered = final_df[final_df["Weighted_Strike"] >= min_strike]
-        if risk_filter != "All":
-            filtered = filtered[filtered["Risk_Level"] == risk_filter]
-        filtered = filtered[filtered["Instrument"] != "Totals"]
+
+if risk_filter != "All":
+    filtered = filtered[filtered["Risk_Level"] == risk_filter]
+
+# Exclude "Totals" rows with case/space safety
+filtered = filtered[~filtered["Instrument"].astype(str).str.strip().str.lower().eq("totals")]
 
         def color_rr(val):
             try:
