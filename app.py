@@ -8,7 +8,7 @@ st.set_page_config(layout="wide")
 
 
 # Page Navigation
-page = st.sidebar.radio("Select Page", ["Range Finder", "DCA Risk Calculator"])
+page = st.sidebar.radio("Select Page", ["Range Finder"])
 
 # -----end section 1 - Setup & Page Navigation-----
 # -----start section 2 - Range Finder Uploads + Filters-----
