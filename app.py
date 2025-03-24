@@ -219,7 +219,7 @@ elif page == "DCA Risk Calculator":
     st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
 
 # -----end section 5 - DCA CALCULATOR: UI, BLENDED ENTRY, AND SUMMARY TABLE-----
-# -----start section 6 - DCA CALCULATOR: RISK/REWARD TABLE-----
+# -----start section 6---- - DCA CALCULATOR: UI, BLENDED ENTRY, AND SUMMARY TABLE - - - -
 elif page == "DCA Risk Calculator":
     st.title("📐 DCA Risk Calculator")
 
@@ -257,21 +257,14 @@ elif page == "DCA Risk Calculator":
     all_orders = [(0.0, initial_contracts)] + dca_levels
     total_qty = sum(qty for _, qty in all_orders)
 
-    if total_qty > 0:
+    if total_qty > 0 and ref_price > 0:
         blended_entry = sum((ref_price * (1 - mae / 100)) * qty for mae, qty in all_orders) / total_qty
         stop_price = ref_price * (1 - max_mae_pct / 100)
-
-        # Convert distance to ticks, then calculate dollar risk
         tick_dist_to_stop = (blended_entry - stop_price) / (tick_val / 100)
         dollar_risk = tick_dist_to_stop * tick_val * total_qty
-
-        # Breakeven logic includes dollar risk recovered per contract
         breakeven = blended_entry + (dollar_risk / (tick_val * total_qty)) * (tick_val / 100)
     else:
-        blended_entry = 0
-        stop_price = 0
-        breakeven = 0
-        dollar_risk = 0
+        blended_entry = stop_price = breakeven = dollar_risk = 0.0
 
     summary_data = {
         "Blended Entry": [round(blended_entry, 4)],
@@ -283,7 +276,7 @@ elif page == "DCA Risk Calculator":
 
     st.subheader("📊 DCA Summary")
     st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
-# -----end section 6 - DCA CALCULATOR: RISK/REWARD TABLE-----
+# -----end section 6-----
 # -----start section 7 - DCA Risk/Reward Table-----
     results = []
     if blended_entry > 0 and total_qty > 0:
