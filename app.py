@@ -220,10 +220,74 @@ elif page == "DCA Risk Calculator":
 
 # -----end section 5 - DCA CALCULATOR: UI, BLENDED ENTRY, AND SUMMARY TABLE-----
 # -----start section 6 - DCA CALCULATOR: RISK/REWARD TABLE-----
+elif page == "DCA Risk Calculator":
+    st.title("📐 DCA Risk Calculator")
 
+    tick_values = {
+        "NQ": 5.00, "YM": 5.00, "ES": 12.5, "GC": 10.00, "6E": 6.25,
+        "CL": 10.00, "RTY": 5.00, "6B": 6.25, "6J": 12.5, "6A": 10.0,
+        "6C": 10.0, "6N": 10.0, "6S": 12.5, "SI": 50.0, "HG": 25.0,
+        "MGC": 1.00, "MES": 1.25, "MNQ": 0.50, "MYM": 0.50, "M2K": 0.50,
+        "M6E": 1.25, "M6B": 1.25, "M6A": 1.00, "MCL": 1.00, "PA": 50.0, "PL": 50.0
+    }
+
+    col1, col2 = st.columns(2)
+    with col1:
+        symbol = st.selectbox("Instrument", list(tick_values.keys()))
+        ref_price = st.number_input("Reference Price", min_value=0.0, format="%.2f")
+        max_mae_pct = st.number_input("Max MAE % (Total Stop)", min_value=0.01, format="%.2f")
+        initial_contracts = st.number_input("Initial Entry Contracts", min_value=1, step=1)
+    with col2:
+        mfe_1 = st.number_input("MFE Target 1 (%)", min_value=0.01, format="%.2f")
+        mfe_2 = st.number_input("MFE Target 2 (%)", min_value=0.00, format="%.2f")
+
+    tick_val = tick_values[symbol]
+    dca_levels = []
+
+    st.subheader("➕ DCA Levels")
+    for i in range(1, 4):
+        c1, c2 = st.columns(2)
+        with c1:
+            mae = st.number_input(f"MAE {i} (%)", min_value=0.00, format="%.2f", key=f"mae_{i}")
+        with c2:
+            qty = st.number_input(f"Contracts @ MAE {i}", min_value=0, step=1, key=f"qty_{i}")
+        if mae > 0 and qty > 0:
+            dca_levels.append((mae, qty))
+
+    all_orders = [(0.0, initial_contracts)] + dca_levels
+    total_qty = sum(qty for _, qty in all_orders)
+
+    if total_qty > 0:
+        blended_entry = sum((ref_price * (1 - mae / 100)) * qty for mae, qty in all_orders) / total_qty
+        stop_price = ref_price * (1 - max_mae_pct / 100)
+
+        # Convert distance to ticks, then calculate dollar risk
+        tick_dist_to_stop = (blended_entry - stop_price) / (tick_val / 100)
+        dollar_risk = tick_dist_to_stop * tick_val * total_qty
+
+        # Breakeven logic includes dollar risk recovered per contract
+        breakeven = blended_entry + (dollar_risk / (tick_val * total_qty)) * (tick_val / 100)
+    else:
+        blended_entry = 0
+        stop_price = 0
+        breakeven = 0
+        dollar_risk = 0
+
+    summary_data = {
+        "Blended Entry": [round(blended_entry, 4)],
+        "Stop Price": [round(stop_price, 4)],
+        "Breakeven Price": [round(breakeven, 4)],
+        "Total Contracts": [total_qty],
+        "Dollar Risk": [round(dollar_risk, 2)]
+    }
+
+    st.subheader("📊 DCA Summary")
+    st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
+# -----end section 6 - DCA CALCULATOR: RISK/REWARD TABLE-----
+# -----start section 7 - DCA Risk/Reward Table-----
     results = []
     for mfe in [mfe_1, mfe_2]:
-        if mfe > 0:
+        if mfe > 0 and blended_entry > 0:
             tp_price = ref_price * (1 + mfe / 100)
             tick_dist_to_tp = (tp_price - blended_entry) / (tick_val / 100)
             profit = tick_dist_to_tp * tick_val * total_qty
@@ -240,5 +304,4 @@ elif page == "DCA Risk Calculator":
         st.subheader("📈 Risk/Reward Table")
         rr_df = pd.DataFrame(results)[["Profit $", "Dollar Risk", "RR", "MFE %", "Max MAE %"]]
         st.dataframe(rr_df, use_container_width=True)
-
-# -----end section 6 - DCA CALCULATOR: RISK/REWARD TABLE-----
+#-----end section 7-----
