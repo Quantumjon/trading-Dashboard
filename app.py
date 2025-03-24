@@ -277,28 +277,26 @@ elif page == "DCA Risk Calculator":
     st.subheader("📊 DCA Summary")
     st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
 # -----end section 6-----
-# -----start section 7 - DCA Risk/Reward Table-----
-    results = []
-    if blended_entry > 0 and total_qty > 0:
-        for mfe in [mfe_1, mfe_2]:
-            if mfe > 0:
-                tp_price = ref_price * (1 + mfe / 100)
-                tick_dist_to_tp = (tp_price - blended_entry) / (tick_val / 100)
-                profit = tick_dist_to_tp * tick_val * total_qty
-                rr = round(profit / dollar_risk, 2) if dollar_risk > 0 else "N/A"
+# -----start section 7-----
+# DCA CALCULATOR: RISK/REWARD TABLE
 
-                results.append({
-                    "Profit $": round(profit, 2),
-                    "Dollar Risk": round(dollar_risk, 2),
-                    "RR": rr,
-                    "MFE %": mfe,
-                    "Max MAE %": max_mae_pct
-                })
+    results = []
+    for mfe in [mfe_1, mfe_2]:
+        if mfe > 0 and blended_entry > 0 and dollar_risk > 0:
+            tp_price = ref_price * (1 + mfe / 100)
+            tick_dist_to_tp = (tp_price - blended_entry) / (tick_val / 100)
+            profit = tick_dist_to_tp * tick_val * total_qty
+            rr = round(profit / dollar_risk, 2)
+            results.append({
+                "Profit $": round(profit, 2),
+                "Dollar Risk": round(dollar_risk, 2),
+                "RR": rr,
+                "MFE %": mfe,
+                "Max MAE %": max_mae_pct
+            })
 
     if results:
         st.subheader("📈 Risk/Reward Table")
         rr_df = pd.DataFrame(results)[["Profit $", "Dollar Risk", "RR", "MFE %", "Max MAE %"]]
         st.dataframe(rr_df, use_container_width=True)
-    else:
-        st.warning("⚠️ No valid MFE target(s) or missing DCA setup. Please ensure values are filled in correctly.")
-#-----end section 7-----
+# -----end section 7-----
