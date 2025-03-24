@@ -285,7 +285,7 @@ elif page == "DCA Risk Calculator":
     st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
 # -----end section 6 - DCA CALCULATOR: RISK/REWARD TABLE-----
 # -----start section 7 - DCA Risk/Reward Table-----
-        results = []
+    results = []
 
         if blended_entry > 0 and total_qty > 0:
             for mfe in [mfe_1, mfe_2]:
