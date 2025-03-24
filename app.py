@@ -277,16 +277,19 @@ elif page == "DCA Risk Calculator":
     st.subheader("📊 DCA Summary")
     st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
 # -----end section 6-----
-# -----start section 7-----
-# DCA CALCULATOR: RISK/REWARD TABLE
+# -----start section 7 - DCA CALCULATOR: RISK/REWARD TABLE-----
 
-    if blended_entry > 0 and total_qty > 0 and dollar_risk > 0:
-        results = []
+    results = []
+
+    if blended_entry > 0 and total_qty > 0:
         for mfe in [mfe_1, mfe_2]:
             if mfe > 0:
-                tp_price = blended_entry * (1 + mfe / 100)
-                tick_dist_to_tp = (tp_price - blended_entry) / (tick_val / 100)
-                profit = tick_dist_to_tp * tick_val * total_qty
+                tp_price = ref_price * (1 + mfe / 100)
+                price_diff_to_tp = tp_price - blended_entry
+                tick_size = 1  # All futures instruments in this calculator use 1-point tick size
+                ticks_to_tp = price_diff_to_tp / tick_size
+                profit = ticks_to_tp * tick_val * total_qty
+
                 rr = round(profit / dollar_risk, 2) if dollar_risk > 0 else "N/A"
                 results.append({
                     "Profit $": round(profit, 2),
@@ -296,8 +299,9 @@ elif page == "DCA Risk Calculator":
                     "Max MAE %": max_mae_pct
                 })
 
-        if results:
-            st.subheader("📈 Risk/Reward Table")
-            rr_df = pd.DataFrame(results)[["Profit $", "Dollar Risk", "RR", "MFE %", "Max MAE %"]]
-            st.dataframe(rr_df, use_container_width=True)
-# -----end section 7-----
+    if results:
+        st.subheader("📈 Risk/Reward Table")
+        rr_df = pd.DataFrame(results)[["Profit $", "Dollar Risk", "RR", "MFE %", "Max MAE %"]]
+        st.dataframe(rr_df, use_container_width=True)
+
+# -----end section 7 - DCA CALCULATOR: RISK/REWARD TABLE-----
