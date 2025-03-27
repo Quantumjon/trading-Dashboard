@@ -17,7 +17,7 @@ if page == "Range Finder":
 
     # --- 2.1 Bulk Upload Block ---
     st.sidebar.markdown("### 📂 Upload")
-    st.sidebar.markdown("Eg: CSVs : `XYZ_GC_6M.csv`")
+    st.sidebar.markdown("CSVs : `XYZ_GC_6M.csv`")
     bulk_files = st.sidebar.file_uploader(
         "Upload CSVs", type="csv", accept_multiple_files=True, key="bulk_upload"
     )
