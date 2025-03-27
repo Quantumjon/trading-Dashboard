@@ -4,302 +4,214 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
+# Page config and sidebar selection
 st.set_page_config(layout="wide")
-
-
-# Page Navigation
 page = st.sidebar.radio("Select Page", ["Range Finder"])
 
 # -----end section 1 - Setup & Page Navigation-----
-# -----start section 2 - Range Finder Uploads + Filters-----
+
+# -----start section 2 - Bulk Uploads + Filters Only-----
 
 if page == "Range Finder":
     st.header("📊 Playbook")
 
-    st.sidebar.header("📂 CSV File Upload")
-    num_instruments = st.sidebar.number_input("Number of Instruments", 1, 20, 1)
-    timeframes = ["1 Year", "6 Months", "3 Months", "1 Month"]
+    # --- 2.1 Bulk Upload Block ---
+    st.sidebar.markdown("### 📂 Upload")
+    st.sidebar.markdown("Upload CSVs : `XYZ_GC_6M.csv`")
+    bulk_files = st.sidebar.file_uploader(
+        "Upload CSVs", type="csv", accept_multiple_files=True, key="bulk_upload"
+    )
+
+    # --- 2.2 Filters ---
+    st.subheader("🔍 Filters")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        min_strike = st.number_input("Min Strike Rate", min_value=0, max_value=100, value=75)
+
+    with col2:
+        max_stdev = st.number_input("Max Strike Rate Deviation (Stdev)", min_value=0.0, max_value=10.0, value=5.0, step=0.1)
+
+    setup_health_radio = st.radio(
+        "Setup Health",
+        ["All", "✅ Core Setup", "⚠️ Watch List", "❌ Decaying"],
+        index=0,
+        horizontal=True
+    )
+
+    if setup_health_radio == "All":
+        setup_health_filter = ["✅ Core Setup", "⚠️ Watch List", "❌ Decaying"]
+    else:
+        setup_health_filter = [setup_health_radio]
+
+    # --- 2.3 Metric Definitions ---
+    with st.expander("📘 Column Definitions & Calculation Logic", expanded=False):
+        st.markdown("""### **Metric Logic Overview**
+
+- **Strike**  
+  Recency-weighted average of strike rate across 1Y, 6M, 3M, and 1M. Emphasizes long-term consistency while giving weight to recent data.
+
+- **MAE / MFE**  
+  Recency-weighted average of Maximum Adverse Excursion (MAE) and Maximum Favorable Excursion (MFE), representing average drawdown and run-up per setup.
+
+- **Range %**  
+  Weighted average of price range (as % of price) for each setup window, favoring recent time periods.
+
+- **MFE/MAE**  
+  Reward-to-risk ratio. A higher value means the setup tends to deliver more reward relative to its risk.
+
+- **Range/MAE (Base Hit Ratio)**  
+  Measures how efficiently price reverts to the otherside of the range. Higher values suggest stronger mean-reverting behavior.
+
+- **Avg Duration**  
+  Recency-weighted average time the setup lasts, formatted as `1h 12m`, `43m`, etc.
+
+- **Strike Decay**  
+  Difference between 1M and 1Y strike rate (`1M - 1Y`). A positive value indicates improving recent performance.
+
+- **Strike Stdev**  
+  Standard deviation of the strike rates across all timeframes. Lower values suggest more consistent historical performance.
+
+- **Setup Health**  
+  Combines Strike Decay + Stdev to classify setups:
+  - ✅ Core Setup: Strike is improving and stable (low stdev)
+  - ⚠️ Watch List: Improving strike, but inconsistent
+  - ❌ Decaying: Strike performance is declining
+        """)
 
     instrument_data = {}
+    combined = []
+    upload_status = {}
 
-    for i in range(1, num_instruments + 1):
-        with st.sidebar.expander(f"Instrument {i}"):
-            instrument_name = st.text_input(f"Name for Instrument {i}", value=f"Instrument_{i}")
-            instrument_data[instrument_name] = {}
+# -----end section 2 - Bulk Uploads + Filters Only-----
+# -----start section 3 - Range Finder Core Logic (Bulk Upload Processing)-----
 
-            for tf in timeframes:
-                uploaded = st.file_uploader(f"{instrument_name} - {tf}", type="csv", key=f"{instrument_name}_{tf}")
-                if uploaded:
-                    df = pd.read_csv(uploaded)
+    timeframe_labels = {"1Y": "1 Year", "6M": "6 Months", "3M": "3 Months", "1M": "1 Month"}
+    expected_timeframes = set(timeframe_labels.values())
+    missing_timeframes_by_instrument = {}
+
+    if bulk_files:
+        for file in bulk_files:
+            filename = file.name.replace(".csv", "")
+            parts = filename.split("_")
+            if len(parts) >= 2:
+                tf_code = parts[-1].upper()
+                tf_label = timeframe_labels.get(tf_code)
+                if tf_label:
+                    instrument = "_".join(parts[1:-1]) if len(parts) > 2 else parts[0]
+                    df = pd.read_csv(file)
                     if "Date" in df.columns:
                         df.rename(columns={"Date": "DayOfWeek"}, inplace=True)
-                    instrument_data[instrument_name][tf] = df
+                    if instrument not in instrument_data:
+                        instrument_data[instrument] = {}
+                    instrument_data[instrument][tf_label] = df
 
-    
-    min_strike = st.number_input("Min Strike Rate", 0, 100, 75)
-    risk_filter = st.radio("Risk Filter", ["All", "Low", "Moderate", "High"], horizontal=True)
-    combined = []
+    # --- Display Grouped Uploads (Compact Sidebar) ---
+    if instrument_data:
+        st.sidebar.markdown("### 📁 Uploaded Files")
+        for inst, timeframes in instrument_data.items():
+            tf_list = sorted(timeframes.keys(), key=lambda x: ["1 Month", "3 Months", "6 Months", "1 Year"].index(x))
+            compact_tf = ", ".join([tf.split()[0] for tf in tf_list])
+            st.sidebar.markdown(f"**{inst}**  • {compact_tf}")
 
-# -----end section 2 - Range Finder Uploads + Filters-----
-# -----start section 3 - Range Finder Core Logic (Merging, Metrics, Risk Score)-----
+# -----end section 3 - Range Finder Core Logic (Bulk Upload Processing)-----
+# -----start section 4 - Range Finder Display + Table Output-----
 
-    for instrument, data in instrument_data.items():
-        if all(tf in data for tf in timeframes):
-            df = data["1 Month"].copy()
-            df.rename(columns={
-                "StrikeRate": "Strike_1M", "AvgMAE": "MAE_1M", "AvgMFE": "MFE_1M", "AvgRangePerc": "Range_1M"
-            }, inplace=True)
+    if instrument_data:
+        for instrument, data in instrument_data.items():
+            if all(tf in data for tf in expected_timeframes):
+                df = data["1 Month"].copy()
+                df.rename(columns={
+                    "StrikeRate": "Strike_1M", "AvgMAE": "MAE_1M", "AvgMFE": "MFE_1M",
+                    "AvgRangePerc": "Range_1M", "AvgDuration": "Duration_1M"
+                }, inplace=True)
 
-            rename_map = {
-                "3 Months": {"StrikeRate": "Strike_3M", "AvgMAE": "MAE_3M", "AvgMFE": "MFE_3M", "AvgRangePerc": "Range_3M"},
-                "6 Months": {"StrikeRate": "Strike_6M", "AvgMAE": "MAE_6M", "AvgMFE": "MFE_6M", "AvgRangePerc": "Range_6M"},
-                "1 Year": {"StrikeRate": "Strike_1Y", "AvgMAE": "MAE_1Y", "AvgMFE": "MFE_1Y", "AvgRangePerc": "Range_1Y"},
-            }
+                rename_map = {
+                    "3 Months": {"StrikeRate": "Strike_3M", "AvgMAE": "MAE_3M", "AvgMFE": "MFE_3M", "AvgRangePerc": "Range_3M", "AvgDuration": "Duration_3M"},
+                    "6 Months": {"StrikeRate": "Strike_6M", "AvgMAE": "MAE_6M", "AvgMFE": "MFE_6M", "AvgRangePerc": "Range_6M", "AvgDuration": "Duration_6M"},
+                    "1 Year": {"StrikeRate": "Strike_1Y", "AvgMAE": "MAE_1Y", "AvgMFE": "MFE_1Y", "AvgRangePerc": "Range_1Y", "AvgDuration": "Duration_1Y"},
+                }
 
-            for tf, cols in rename_map.items():
-                df_temp = data[tf].rename(columns=cols)
+                for tf, cols in rename_map.items():
+                    df_temp = data[tf].rename(columns=cols)
+                    required = ["DayOfWeek", "RangeStart", "RangeEnd"] + list(cols.values())
+                    df_temp = df_temp.loc[:, required]
+                    df = df.merge(df_temp, on=["DayOfWeek", "RangeStart", "RangeEnd"], how="left")
 
-                # Keep only required columns: key join columns + renamed metric columns
-                required = ["DayOfWeek", "RangeStart", "RangeEnd"] + list(cols.values())
-                df_temp = df_temp.loc[:, required]
+                w_strike = {"1M": 0.1, "3M": 0.2, "6M": 0.3, "1Y": 0.4}
+                w_recent = {"1M": 0.4, "3M": 0.3, "6M": 0.2, "1Y": 0.1}
 
-                df = df.merge(df_temp, on=["DayOfWeek", "RangeStart", "RangeEnd"], how="left")
+                df["Strike"] = sum(df[f"Strike_{k}"] * w for k, w in w_strike.items())
+                df["MAE"] = sum(df[f"MAE_{k}"] * w for k, w in w_recent.items())
+                df["MFE"] = sum(df[f"MFE_{k}"] * w for k, w in w_recent.items())
+                df["Range %"] = sum(df[f"Range_{k}"] * w for k, w in w_recent.items())
+                df["Avg Duration"] = sum(df[f"Duration_{k}"] * w for k, w in w_recent.items())
 
-            weights_strike = {"1M": 0.1, "3M": 0.2, "6M": 0.3, "1Y": 0.4}
-            weights_mfe_mae = {"1M": 0.4, "3M": 0.3, "6M": 0.2, "1Y": 0.1}
+                df["MFE/MAE"] = df["MFE"] / df["MAE"]
+                df["Range/MAE"] = df["Range %"] / df["MAE"]
 
-            df["Weighted_Strike"] = sum(df[f"Strike_{k}"] * w for k, w in weights_strike.items())
-            df["Weighted_MAE"] = sum(df[f"MAE_{k}"] * w for k, w in weights_mfe_mae.items())
-            df["Weighted_MFE"] = sum(df[f"MFE_{k}"] * w for k, w in weights_mfe_mae.items())
+                df["Strike_Stdev"] = df[[f"Strike_{k}" for k in w_strike]].std(axis=1)
+                df["Strike_Decay"] = df["Strike_1M"] - df["Strike_1Y"]
 
-            df["Reward/Risk Ratio"] = df["Weighted_MFE"] / df["Weighted_MAE"]
-            df["Reward/Risk Ratio"] = df["Reward/Risk Ratio"].replace([np.inf, -np.inf], np.nan).fillna(0)
+                def classify_setup(decay, stdev):
+                    if decay > 0 and stdev <= max_stdev:
+                        return "✅ Core Setup"
+                    elif decay > 0:
+                        return "⚠️ Watch List"
+                    else:
+                        return "❌ Decaying"
 
-            df["Risk_Score"] = sum(
-                (df[f"MAE_{k}"] / df[f"Range_{k}"]) * 100 * weights_strike[k] for k in weights_strike
-            )
-            df["Risk_Level"] = df["Risk_Score"].apply(lambda x: "Low" if x < 80 else "Moderate" if x <= 120 else "High")
-
-            df["Instrument"] = instrument
-            combined.append(df)
-
-# -----end section 3 - Range Finder Core Logic (Merging, Metrics, Risk Score)-----
-# -----start section 4 - Range Finder Display + Tooltip + Color Grading-----
+                df["Setup Health"] = df.apply(lambda row: classify_setup(row["Strike_Decay"], row["Strike_Stdev"]), axis=1)
+                df["Instrument"] = instrument
+                combined.append(df)
 
     if combined:
         final_df = pd.concat(combined).reset_index(drop=True)
 
-        with st.expander("ℹ️ Column Guide & Metric Logic"):
-            st.markdown("""
-### **Metric Definitions & Calculation Logic**
-
-**Weighted Strike Rate**  
-> Combines strike rate from all timeframes using:  
-`(1Y × 40%) + (6M × 30%) + (3M × 20%) + (1M × 10%)`
-
-**Weighted MFE & MAE**  
-> Use recency-weighted logic to reflect current market behavior:  
-`(1M = 40%, 3M = 30%, 6M = 20%, 1Y = 10%)`
-
-**Reward/Risk Ratio**  
-> `Weighted MFE ÷ Weighted MAE`  
-- ≥ 1.80: Excellent (green)  
-- 1.30–1.79: Tradable (yellow)  
-- 1.00–1.29: Unreliable (orange)  
-- < 1.00: Fail (red)
-
-**Risk Level**  
-> Based on drawdown vs. range (%):  
-- Low: < 80  
-- Moderate: 80–120  
-- High: > 120
-""")
-
-        st.markdown("### 📊 Combined Refined Table (All Instruments)")
-        display_cols = [
-            "Instrument", "DayOfWeek", "RangeStart", "RangeEnd",
-            "Weighted_Strike", "Weighted_MFE", "Weighted_MAE",
-            "Reward/Risk Ratio", "Risk_Level"
-        ]
-
-        filtered = final_df[final_df["Weighted_Strike"] >= min_strike]
-
-        if risk_filter != "All":
-            filtered = filtered[filtered["Risk_Level"] == risk_filter]
-
-        # Remove any rows where 'Totals' appears in Instrument or DayOfWeek
+        # Filter and clean
+        filtered = final_df[final_df["Strike"] >= min_strike]
+        filtered = filtered[filtered["Setup Health"].isin(setup_health_filter)]
+        filtered = filtered[filtered["Strike_Stdev"] <= max_stdev]
         filtered = filtered[
             ~filtered["Instrument"].astype(str).str.strip().str.lower().eq("totals") &
             ~filtered["DayOfWeek"].astype(str).str.strip().str.lower().eq("totals")
         ]
 
-        # Apply color grading to Reward/Risk Ratio
-        def color_rr(val):
-            try:
-                val = float(val)
-                if val >= 1.80:
-                    return "background-color: #4caf50;"  # Green
-                elif val >= 1.30:
-                    return "background-color: #fbc02d;"  # Yellow-Gold
-                elif val >= 1.00:
-                    return "background-color: #ff9800;"  # Orange
-                else:
-                    return "background-color: #f44336;"  # Red
-            except:
-                return ""
+        def format_duration(minutes):
+            h = int(minutes) // 60
+            m = int(minutes) % 60
+            return f"{h}h {m}m" if h else f"{m}m"
 
-        styled_combined = filtered[display_cols].style.applymap(color_rr, subset=["Reward/Risk Ratio"])
-        st.dataframe(styled_combined, use_container_width=True)
+        # Format and center display
+        display_cols = [
+            "Instrument", "DayOfWeek", "RangeStart", "RangeEnd",
+            "Strike", "MFE", "MAE", "Range %", "Range/MAE", "MFE/MAE",
+            "Avg Duration", "Setup Health"
+        ]
+        numeric_cols = ["Strike", "MFE", "MAE", "Range %", "Range/MAE", "MFE/MAE"]
 
-        st.markdown("### 📈 Individual Instrument Tables")
+        rounded = filtered[display_cols].copy()
+        for col in numeric_cols:
+            rounded[col] = rounded[col].apply(lambda x: f"{x:.2f}")
+        rounded["Avg Duration"] = filtered["Avg Duration"].apply(format_duration)
+
+        # Combined Table
+        st.markdown("### 📊 Combined Playbook ")
+        st.dataframe(rounded.style.set_properties(**{"text-align": "center"}), use_container_width=True)
+
+        # Per Instrument
+        st.markdown("### 📈 Individual Playbook")
         for inst in filtered["Instrument"].unique():
             inst_df = filtered[filtered["Instrument"] == inst]
+            inst_rounded = inst_df[display_cols].copy()
+            for col in numeric_cols:
+                inst_rounded[col] = inst_rounded[col].apply(lambda x: f"{x:.2f}")
+            inst_rounded["Avg Duration"] = inst_df["Avg Duration"].apply(format_duration)
             st.markdown(f"#### {inst}")
-            styled_inst = inst_df[display_cols].style.applymap(color_rr, subset=["Reward/Risk Ratio"])
-            st.dataframe(styled_inst, use_container_width=True)
+            st.dataframe(inst_rounded.style.set_properties(**{"text-align": "center"}), use_container_width=True)
 
     else:
-        st.info("📥 Please upload all 4 timeframes for at least one instrument to begin analysis.")
 
-# -----end section 4 - Range Finder Display + Tooltip + Color Grading-----
-# -----start section 5 - DCA CALCULATOR: UI, BLENDED ENTRY, AND SUMMARY TABLE-----
+        st.info("📥 Please upload all 4 time periods for at least one instrument to begin analysis.")
 
-elif page == "DCA Risk Calculator":
-    st.title("📐 DCA Risk Calculator")
-
-    tick_values = {
-        "NQ": 5.00, "YM": 5.00, "ES": 12.5, "GC": 10.00, "6E": 6.25,
-        "CL": 10.00, "RTY": 5.00, "6B": 6.25, "6J": 12.5, "6A": 10.0,
-        "6C": 10.0, "6N": 10.0, "6S": 12.5, "SI": 50.0, "HG": 25.0,
-        "MGC": 1.00, "MES": 1.25, "MNQ": 0.50, "MYM": 0.50, "M2K": 0.50,
-        "M6E": 1.25, "M6B": 1.25, "M6A": 1.00, "MCL": 1.00, "PA": 50.0, "PL": 50.0
-    }
-
-    col1, col2 = st.columns(2)
-    with col1:
-        symbol = st.selectbox("Instrument", list(tick_values.keys()))
-        ref_price = st.number_input("Reference Price", min_value=0.0, format="%.2f")
-        max_mae_pct = st.number_input("Max MAE % (Total Stop)", min_value=0.01, format="%.2f")
-        initial_contracts = st.number_input("Initial Entry Contracts", min_value=1, step=1)
-    with col2:
-        mfe_1 = st.number_input("MFE Target 1 (%)", min_value=0.01, format="%.2f")
-        mfe_2 = st.number_input("MFE Target 2 (%)", min_value=0.00, format="%.2f")
-
-    tick_val = tick_values[symbol]
-    dca_levels = []
-
-    st.subheader("➕ DCA Levels")
-    for i in range(1, 4):
-        c1, c2 = st.columns(2)
-        with c1:
-            mae = st.number_input(f"MAE {i} (%)", min_value=0.00, format="%.2f", key=f"mae_{i}")
-        with c2:
-            qty = st.number_input(f"Contracts @ MAE {i}", min_value=0, step=1, key=f"qty_{i}")
-        if mae > 0 and qty > 0:
-            dca_levels.append((mae, qty))
-
-    all_orders = [(0.0, initial_contracts)] + dca_levels
-    total_qty = sum(qty for _, qty in all_orders)
-
-    blended_entry = sum((ref_price * (1 - mae / 100)) * qty for mae, qty in all_orders) / total_qty
-    stop_price = ref_price * (1 - max_mae_pct / 100)
-    tick_dist_to_stop = (blended_entry - stop_price) / (tick_val / 100)
-    dollar_risk = tick_dist_to_stop * tick_val * total_qty
-    breakeven = blended_entry + (dollar_risk / (tick_val * total_qty)) * (tick_val / 100)
-
-    summary_data = {
-        "Blended Entry": [round(blended_entry, 4)],
-        "Stop Price": [round(stop_price, 4)],
-        "Breakeven Price": [round(breakeven, 4)],
-        "Total Contracts": [total_qty],
-        "Dollar Risk": [round(dollar_risk, 2)]
-    }
-
-    st.subheader("📊 DCA Summary")
-    st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
-
-# -----end section 5 - DCA CALCULATOR: UI, BLENDED ENTRY, AND SUMMARY TABLE-----
-# -----start section 6---- - DCA CALCULATOR: UI, BLENDED ENTRY, AND SUMMARY TABLE - - - -
-elif page == "DCA Risk Calculator":
-    st.title("📐 DCA Risk Calculator")
-
-    tick_values = {
-        "NQ": 5.00, "YM": 5.00, "ES": 12.5, "GC": 10.00, "6E": 6.25,
-        "CL": 10.00, "RTY": 5.00, "6B": 6.25, "6J": 12.5, "6A": 10.0,
-        "6C": 10.0, "6N": 10.0, "6S": 12.5, "SI": 50.0, "HG": 25.0,
-        "MGC": 1.00, "MES": 1.25, "MNQ": 0.50, "MYM": 0.50, "M2K": 0.50,
-        "M6E": 1.25, "M6B": 1.25, "M6A": 1.00, "MCL": 1.00, "PA": 50.0, "PL": 50.0
-    }
-
-    col1, col2 = st.columns(2)
-    with col1:
-        symbol = st.selectbox("Instrument", list(tick_values.keys()))
-        ref_price = st.number_input("Reference Price", min_value=0.0, format="%.2f")
-        max_mae_pct = st.number_input("Max MAE % (Total Stop)", min_value=0.01, format="%.2f")
-        initial_contracts = st.number_input("Initial Entry Contracts", min_value=1, step=1)
-    with col2:
-        mfe_1 = st.number_input("MFE Target 1 (%)", min_value=0.01, format="%.2f")
-        mfe_2 = st.number_input("MFE Target 2 (%)", min_value=0.00, format="%.2f")
-
-    tick_val = tick_values[symbol]
-    dca_levels = []
-
-    st.subheader("➕ DCA Levels")
-    for i in range(1, 4):
-        c1, c2 = st.columns(2)
-        with c1:
-            mae = st.number_input(f"MAE {i} (%)", min_value=0.00, format="%.2f", key=f"mae_{i}")
-        with c2:
-            qty = st.number_input(f"Contracts @ MAE {i}", min_value=0, step=1, key=f"qty_{i}")
-        if mae > 0 and qty > 0:
-            dca_levels.append((mae, qty))
-
-    all_orders = [(0.0, initial_contracts)] + dca_levels
-    total_qty = sum(qty for _, qty in all_orders)
-
-    if total_qty > 0 and ref_price > 0:
-        blended_entry = sum((ref_price * (1 - mae / 100)) * qty for mae, qty in all_orders) / total_qty
-        stop_price = ref_price * (1 - max_mae_pct / 100)
-        tick_dist_to_stop = (blended_entry - stop_price) / (tick_val / 100)
-        dollar_risk = tick_dist_to_stop * tick_val * total_qty
-        breakeven = blended_entry + (dollar_risk / (tick_val * total_qty)) * (tick_val / 100)
-    else:
-        blended_entry = stop_price = breakeven = dollar_risk = 0.0
-
-    summary_data = {
-        "Blended Entry": [round(blended_entry, 4)],
-        "Stop Price": [round(stop_price, 4)],
-        "Breakeven Price": [round(breakeven, 4)],
-        "Total Contracts": [total_qty],
-        "Dollar Risk": [round(dollar_risk, 2)]
-    }
-
-    st.subheader("📊 DCA Summary")
-    st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
-# -----end section 6-----
-# -----start section 7 - DCA Risk/Reward Table-----
-
-    results = []
-    tick_size = tick_val / 100
-
-    if blended_entry > 0 and total_qty > 0:
-        for mfe in [mfe_1, mfe_2]:
-            if mfe > 0:
-                tp_price = ref_price * (1 + mfe / 100)
-                tick_dist_to_tp = (tp_price - blended_entry) / tick_size
-                profit = tick_dist_to_tp * tick_val * total_qty
-                rr = round(profit / dollar_risk, 2) if dollar_risk > 0 else "N/A"
-                results.append({
-                    "Profit $": round(profit, 2),
-                    "Dollar Risk": round(dollar_risk, 2),
-                    "RR": rr,
-                    "MFE %": mfe,
-                    "Max MAE %": max_mae_pct
-                })
-
-    if results:
-        st.subheader("📈 Risk/Reward Table")
-        rr_df = pd.DataFrame(results)[["Profit $", "Dollar Risk", "RR", "MFE %", "Max MAE %"]]
-        st.dataframe(rr_df, use_container_width=True)
-
-# -----end section 7-----
+# -----end section 4 - Range Finder Display + Table Output-----
