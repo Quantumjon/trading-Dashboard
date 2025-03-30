@@ -1,11 +1,13 @@
-# -----start section 1 - Setup & Page Navigation-----
+# ----start section 1 - Setup & Page Navigation-----
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 
 # Page config and sidebar selection
 st.set_page_config(layout="wide")
-page = st.sidebar.radio("Select Page", ["Range Finder"])
+page = st.sidebar.radio("Select Page", ["Range Finder", "Backtest Analyzer"])
+
 
 # -----end section 1 - Setup & Page Navigation-----
 
@@ -214,3 +216,173 @@ if page == "Range Finder":
         st.info("📥 Please upload all 4 time periods for at least one instrument to begin analysis.")
 
 # -----end section 4 - Range Finder Display + Table Output-----
+
+#-------- end dashboard 1 -----------------------------------------------------
+#-------- start dashboard 2 ---------------------------------------------------
+
+# -----start section X - MAE/MFE Analyzer Integration -----
+if page == "Backtest Analyzer":
+    import plotly.express as px
+
+    st.header("📊 Backtest Analyzer")
+
+    uploaded_file = st.sidebar.file_uploader("📁 1Year Backtest CSV", type=["csv"], key="upload")
+    if uploaded_file:
+        df = pd.read_csv(uploaded_file)
+        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df["DayOfWeek"] = df["DayOfWeek"].str.strip().str.title()
+        valid_days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday"]
+        df = df[df["DayOfWeek"].isin(valid_days)]
+
+        st.sidebar.subheader("📅 Filter by Recency")
+        num_trades = st.sidebar.number_input("Trades per weekday (MAE/MFE charts)", min_value=5, max_value=200, value=30, step=5)
+
+        def filter_last_n_per_day(df, n):
+            return df.groupby("DayOfWeek", group_keys=False).apply(lambda g: g.sort_values("Datetime").tail(n)).reset_index(drop=True)
+
+        strategy = st.radio("Choose Strategy:", ["MAE Optimizer (Base-Hit TP)", "MFE Strategy (Fixed 0.3% MAE)"])
+
+        # === MAE STRATEGY ===
+        if strategy == "MAE Optimizer (Base-Hit TP)":
+            st.subheader("🟩 MAE Optimizer: Base-Hit Strategy")
+            df["Direction"] = np.where(df["BreakoutDirection"] == "High", "Short", "Long")
+            df["RewardPct"] = np.where(
+                df["Direction"] == "Short",
+                (df["BreakoutClose"] - df["Range_Low"]) / df["BreakoutClose"],
+                (df["Range_High"] - df["BreakoutClose"]) / df["BreakoutClose"],
+            )
+
+            mae_steps = np.round(np.arange(0.01, 0.31, 0.01), 3)
+            min_sr_threshold = 60
+            results = []
+
+            for day, group in df.groupby("DayOfWeek"):
+                best_row = None
+                best_expectancy = -np.inf
+                for mae in mae_steps:
+                    eligible = group[group["MAE"] <= mae]
+                    if eligible.empty:
+                        continue
+                    wins = eligible["Hit"].sum()
+                    total = len(group)
+                    sr = (wins / total) * 100 if total else 0
+                    if sr < min_sr_threshold:
+                        continue
+                    rr = eligible["RewardPct"] / (mae / 100)
+                    median_rr = np.median(rr)
+                    exp = (sr / 100) * median_rr - (1 - sr / 100)
+
+                    recent = group.sort_values("Datetime").iloc[-30:]
+                    historic = group.sort_values("Datetime").iloc[:-30]
+                    mae_shift = (recent["MAE"].mean() - historic["MAE"].mean()) / historic["MAE"].mean() * 100 if not historic.empty else 0
+                    range_shift = (recent["RangePercentage"].mean() - historic["RangePercentage"].mean()) / historic["RangePercentage"].mean() * 100 if not historic.empty else 0
+                    dur_shift = (recent["Duration"].mean() - historic["Duration"].mean()) / historic["Duration"].mean() * 100 if not historic.empty else 0
+
+                    if exp > best_expectancy:
+                        best_row = {
+                            "DayOfWeek": day,
+                            "MAE_Stop": mae,
+                            "Strike Rate (%)": round(sr, 2),
+                            "R:R": round(median_rr, 2),
+                            "Expectancy": round(exp, 4),
+                            "MAE Change (%)": round(mae_shift, 1),
+                            "Range% Change (%)": round(range_shift, 1),
+                            "Duration Change (%)": round(dur_shift, 1),
+                        }
+                        best_expectancy = exp
+                if best_row:
+                    results.append(best_row)
+
+            mae_df = pd.DataFrame(results)
+
+            def score_confidence(row):
+                score = 0
+                if row["Strike Rate (%)"] >= 75:
+                    score += 1
+                if row["Expectancy"] >= 0.15:
+                    score += 1
+                return score
+
+            mae_df["ConfidenceScore"] = mae_df.apply(score_confidence, axis=1)
+            mae_df["Confidence"] = mae_df["ConfidenceScore"].apply(lambda s: "High" if s == 2 else "Medium" if s == 1 else "Low")
+
+            st.subheader("🧠 Trader’s Assistance (MAE Strategy)")
+            for _, row in mae_df.iterrows():
+                label = {
+                    "High": "(core setup, confidence: High)",
+                    "Medium": "(watchlist, confidence: Medium)",
+                    "Low": "(risky setup, confidence: Low)"
+                }[row["Confidence"]]
+                st.markdown(
+                    f"- **{row['DayOfWeek']} {label}** → Optimal stop at `{row['MAE_Stop']:.2f}%` "
+                    f"→ SR `{row['Strike Rate (%)']:.1f}%`, R:R `{row['R:R']:.2f}`, EV `{row['Expectancy']:.2f}` | "
+                    f"Volatility shift: MAE `{row['MAE Change (%)']:+.1f}%`, Range `{row['Range% Change (%)']:+.1f}%`, Duration `{row['Duration Change (%)']:+.1f}%`."
+                )
+
+            st.subheader("📊 Optimized MAE Summary")
+            st.dataframe(mae_df, use_container_width=True)
+
+            # -------- MAE SCATTER (Interactive + Reference Lines) --------
+            st.subheader("📉 MAE Distribution (Last Trades per Day)")
+            df_recent = filter_last_n_per_day(df, num_trades)
+            fig = px.scatter(df_recent, x="Datetime", y="MAE", color="DayOfWeek", title="MAE Scatter Plot by Day", height=600)
+            fig.update_traces(marker=dict(size=6, opacity=0.7))
+            fig.update_layout(yaxis_title="MAE (%)", xaxis_title="Date", legend_title="Day")
+            for level in [0.05, 0.1, 0.15, 0.2, 0.25, 0.3]:
+                fig.add_hline(y=level, line_dash="dash", line_color="gray", opacity=0.5)
+            st.plotly_chart(fig, use_container_width=True)
+            # -------- END MAE SCATTER --------
+
+        # === MFE STRATEGY ===
+        elif strategy == "MFE Strategy (Fixed 0.3% MAE)":
+            st.subheader("🟦 MFE Strategy: Target Optimization (0.3% MAE Stop)")
+            df_fixed = df[df["MAE"] <= 0.3]
+            mfe_steps = np.round(np.arange(0.01, 0.31, 0.01), 3)
+            results = []
+            for day, group in df_fixed.groupby("DayOfWeek"):
+                valid = group[group["Hit"] == 1]
+                best_ev = -999
+                best_row = None
+                for mfe in mfe_steps:
+                    hit_count = (valid["MFE"] >= mfe).sum()
+                    total = len(valid)
+                    hit_rate = hit_count / total if total else 0
+                    rr = mfe / 0.3
+                    ev = hit_rate * rr - (1 - hit_rate)
+                    if ev > best_ev:
+                        best_row = {
+                            "DayOfWeek": day,
+                            "MFE_Target": mfe,
+                            "Hit Rate (%)": round(hit_rate * 100, 2),
+                            "R:R": round(rr, 2),
+                            "Expectancy": round(ev, 4),
+                            "Trades": total
+                        }
+                        best_ev = ev
+                if best_row:
+                    results.append(best_row)
+
+            mfe_df = pd.DataFrame(results)
+
+            st.subheader("🧠 Trader’s Assistance (MFE Strategy)")
+            for _, row in mfe_df.iterrows():
+                st.markdown(
+                    f"- **{row['DayOfWeek']}** → Optimal MFE Target: `{row['MFE_Target']:.2f}` "
+                    f"→ SR `{row['Hit Rate (%)']:.1f}%`, R:R `{row['R:R']:.2f}`, EV `{row['Expectancy']:.2f}` "
+                    f"from `{row['Trades']}` qualifying trades."
+                )
+
+            st.subheader("📊 MFE Target Summary")
+            st.dataframe(mfe_df, use_container_width=True)
+
+            # -------- MFE SCATTER (Interactive + Reference Lines) --------
+            st.subheader("📈 MFE Distribution (Last Trades per Day)")
+            df_mfe_recent = filter_last_n_per_day(df_fixed, num_trades)
+            fig2 = px.scatter(df_mfe_recent, x="Datetime", y="MFE", color="DayOfWeek", title="MFE Scatter Plot by Day", height=600)
+            fig2.update_traces(marker=dict(size=6, opacity=0.7))
+            fig2.update_layout(yaxis_title="MFE (%)", xaxis_title="Date", legend_title="Day")
+            for level in [0.05, 0.1, 0.15, 0.2, 0.25, 0.3]:
+                fig2.add_hline(y=level, line_dash="dash", line_color="gray", opacity=0.5)
+            st.plotly_chart(fig2, use_container_width=True)
+            # -------- END MFE SCATTER --------
+# -----end section X - MAE/MFE Analyzer Integration -----
