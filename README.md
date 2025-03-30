@@ -1,0 +1,1 @@
+echo plotly >> requirements.txt
