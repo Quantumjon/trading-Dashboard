@@ -33,15 +33,18 @@ if page == "Range Finder":
 
     with st.expander("📘 Column Definitions & Calculation Logic", expanded=False):
         st.markdown("""### **Metric Logic Overview**
-- **Strike**: Recency-weighted average of strike rate across timeframes.
-- **MAE / MFE**: Avg drawdown / run-up per setup.
-- **Range %**: Avg price range in percent.
-- **MFE/MAE**: Reward-to-risk ratio.
-- **Range/MAE**: Measures mean-reversion power.
-- **Avg Duration**: Avg time for setup completion.
-- **Strike Decay**: Recent improvement (`1M - 1Y`).
-- **Strike Stdev**: Variability across timeframes.
-- **Setup Health**: Combines decay & stdev for quality label.""")
+This module tests a range of stop-loss levels (0.01% to 0.30%) to identify the most effective stop for each weekday.
+
+- A **Win** is counted only if TP is hit **before** the MAE threshold is breached.
+- A **Loss** is recorded as soon as MAE exceeds the stop level.
+- The bot selects the best stop based on **Strike Rate** and **Expectancy**.
+
+**Metrics**:
+- **R:R** = Reward (range size) ÷ stop level
+- **Expectancy** = (Strike Rate × R:R) − (1 − Strike Rate)
+- **Volatility Shifts** = Changes in MAE, range %, and duration
+- **Confidence**: Core Setup / Watchlist / Risky, based on strike and EV
+""")
 
     instrument_data = {}
     combined = []
@@ -152,160 +155,333 @@ if page == "Range Finder":
     else:
         st.info("📥 Please upload all 4 timeframes per instrument.")
 # ----end section 2 - Range Finder -----
-# -----start section 3 - Backtest Analyzer (MAE/MFE Strategy) -----
-if page == "Backtest Analyzer":
-    st.header("📊 Backtest Analyzer")
-    uploaded_file = st.sidebar.file_uploader("📁 Upload 1Y Backtest CSV", type=["csv"], key="upload_bt")
 
+####################################################################
+
+
+# ----- START SECTION: Backtest Analyzer Setup -----
+if page == "Backtest Analyzer":
+    import plotly.express as px
+    import plotly.io as pio
+
+    st.header("📊 Backtest Analyzer")
+
+    uploaded_file = st.sidebar.file_uploader("📁 Upload Tactix 1Y Backtest CSV", type=["csv"], key="upload")
     if uploaded_file:
         df = pd.read_csv(uploaded_file)
         df["Datetime"] = pd.to_datetime(df["Datetime"])
         df["DayOfWeek"] = df["DayOfWeek"].str.strip().str.title()
-        df = df[df["DayOfWeek"].isin(["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday"])]
+        df = df[df["DayOfWeek"].isin(["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])]
+# ----- END SECTION: Backtest Analyzer Setup -----
 
-        st.sidebar.subheader("📅 Filter by Recency")
-        num_trades = st.sidebar.number_input("Trades per weekday (MAE/MFE charts)", 5, 200, 30, 5)
 
-        def filter_last_n(df, n):
-            return df.groupby("DayOfWeek", group_keys=False).apply(lambda g: g.sort_values("Datetime").tail(n)).reset_index(drop=True)
+# ----- START SECTION: Recency Filter -----
+        st.sidebar.subheader("📅 Recency Filter")
+        num_trades = st.sidebar.number_input("Last N Trades per Day", 5, 200, 30, step=5)
 
-        strategy = st.radio("Choose Strategy:", ["MAE Optimizer (Base-Hit TP)", "MFE Strategy (Fixed 0.3% MAE)"])
+        def filter_last_n_per_day(df, n):
+            return df.groupby("DayOfWeek", group_keys=False).apply(
+                lambda g: g.sort_values("Datetime").tail(n)
+            ).reset_index(drop=True)
+# ----- END SECTION: Recency Filter -----
 
-        with st.expander("📘 How are these values calculated?"):
-            if strategy == "MAE Optimizer (Base-Hit TP)":
-                st.markdown("""
-                **MAE Strategy Logic:**
-                - Calculates strike rate based on TP hit before MAE breach.
-                - Tests all MAE thresholds (0.01 to 0.3) and picks the level with highest expectancy.
-                - Expectancy = `SR * R:R - (1 - SR)`
-                - R:R = distance to opposite range side ÷ MAE stop level.
-                - Also evaluates recent vs historical MAE, Range%, Duration for volatility shifts.
-                """)
-            else:
-                st.markdown("""
-                **MFE Strategy Logic (0.3% MAE Stop):**
-                - Filters trades that did not exceed 0.3 MAE.
-                - Calculates hit rate for different MFE targets.
-                - Expectancy = `Hit Rate * (MFE / 0.3) - (1 - Hit Rate)`
-                - Selects MFE level with highest expectancy.
-                """)
 
-        # === MAE Strategy ===
+# ----- START SECTION: Strategy Selection -----
+        strategy = st.radio("Choose Strategy:", ["MAE Optimizer (Base-Hit TP)", "MFE Strategy (Fixed 0.3% MAE)"], key="strategy_selector")
+# ----- END SECTION: Strategy Selection -----
+
+# ----- START SECTION: MAE Strategy -----
         if strategy == "MAE Optimizer (Base-Hit TP)":
-            st.subheader("🟩 MAE Optimizer: Base-Hit Strategy")
+            st.subheader("🟥 MAE Optimizer: Base-Hit Strategy")
+
+            with st.expander("📘 Strategy Logic & Metrics"):
+                st.markdown("""
+This module tests a range of stop-loss levels (0.01% to 0.30%) to identify the most effective stop for each weekday.
+
+- A **Win** is counted only if TP is hit **before** the MAE threshold is breached.
+- A **Loss** is recorded as soon as MAE exceeds the stop level.
+- The bot selects the best stop based on **Strike Rate** and **Expectancy**.
+
+**Metrics**:
+- **R:R** = Reward (range size) ÷ stop level
+- **Expectancy** = (Strike Rate × R:R) − (1 − Strike Rate)
+- **Volatility Shifts** = Changes in MAE, range %, and duration
+- **Confidence**: Core Setup / Watchlist / Risky, based on strike and EV
+""")
 
             df["Direction"] = np.where(df["BreakoutDirection"] == "High", "Short", "Long")
             df["RewardPct"] = np.where(
                 df["Direction"] == "Short",
                 (df["BreakoutClose"] - df["Range_Low"]) / df["BreakoutClose"],
-                (df["Range_High"] - df["BreakoutClose"]) / df["BreakoutClose"],
+                (df["Range_High"] - df["BreakoutClose"]) / df["BreakoutClose"]
             )
 
-            results = []
             mae_levels = np.round(np.arange(0.01, 0.31, 0.01), 3)
+            results = []
+            min_sr = 60
 
-            for day, group in df.groupby("DayOfWeek"):
+            for day in ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]:
+                group = df[df["DayOfWeek"] == day].copy()
                 best_row = None
-                best_exp = -999
+                best_ev = -np.inf
+
                 for mae in mae_levels:
-                    eligible = group[group["MAE"] <= mae]
-                    if eligible.empty:
-                        continue
-                    wins = eligible["Hit"].sum()
-                    sr = wins / len(group) * 100
-                    if sr < 60: continue
-                    rr = eligible["RewardPct"] / (mae / 100)
-                    median_rr = np.median(rr)
-                    ev = (sr / 100) * median_rr - (1 - sr / 100)
-                    recent = group.sort_values("Datetime").iloc[-30:]
-                    historic = group.sort_values("Datetime").iloc[:-30]
+                    group["Sim_Result"] = np.where((group["MAE"] <= mae) & (group["Hit"] == 1), 1, 0)
+                    sr = group["Sim_Result"].mean() * 100
+                    if sr < min_sr: continue
+
+                    rr = group[group["Sim_Result"] == 1]["RewardPct"] / (mae / 100)
+                    ev = (sr / 100) * np.median(rr) - (1 - sr / 100)
+
+                    recent = group.sort_values("Datetime").tail(num_trades)
+                    historic = group.sort_values("Datetime").iloc[:-num_trades]
                     mae_shift = (recent["MAE"].mean() - historic["MAE"].mean()) / historic["MAE"].mean() * 100 if not historic.empty else 0
                     range_shift = (recent["RangePercentage"].mean() - historic["RangePercentage"].mean()) / historic["RangePercentage"].mean() * 100 if not historic.empty else 0
                     dur_shift = (recent["Duration"].mean() - historic["Duration"].mean()) / historic["Duration"].mean() * 100 if not historic.empty else 0
 
-                    if ev > best_exp:
+                    if ev > best_ev:
                         best_row = {
                             "DayOfWeek": day, "MAE_Stop": mae, "Strike Rate (%)": round(sr, 2),
-                            "R:R": round(median_rr, 2), "Expectancy": round(ev, 4),
+                            "R:R": round(np.median(rr), 2), "Expectancy": round(ev, 4),
                             "MAE Change (%)": round(mae_shift, 1), "Range% Change (%)": round(range_shift, 1),
                             "Duration Change (%)": round(dur_shift, 1)
                         }
-                        best_exp = ev
+                        best_ev = ev
+
                 if best_row: results.append(best_row)
 
             mae_df = pd.DataFrame(results)
 
-            def confidence(row):
+            def get_confidence(row):
                 score = int(row["Strike Rate (%)"] >= 75) + int(row["Expectancy"] >= 0.15)
-                return ["Low", "Medium", "High"][score]
+                return ["Risky", "Watchlist", "Core Setup"][score]
 
-            mae_df["Confidence"] = mae_df.apply(confidence, axis=1)
+            mae_df["Confidence"] = mae_df.apply(get_confidence, axis=1)
 
-            st.subheader("🧠 Trader’s Assistance (MAE Strategy)")
+
+# ----- START SECTION: MAE Trader Assistant -----
+            df_recent = filter_last_n_per_day(df, num_trades)
+            summaries = []
+
             for _, row in mae_df.iterrows():
-                label = {
-                    "High": "(core setup, confidence: High)",
-                    "Medium": "(watchlist, confidence: Medium)",
-                    "Low": "(risky setup, confidence: Low)"
-                }[row["Confidence"]]
+                day = row["DayOfWeek"]
+                stop = row["MAE_Stop"]
+                label = row["Confidence"]
+                tag = f"{label}"
+
+                filtered = df_recent[df_recent["DayOfWeek"] == day].copy()
+                filtered["Sim_Result"] = np.where((filtered["MAE"] <= stop) & (filtered["Hit"] == 1), 1, 0)
+
+                # Win/Loss classification
+                filtered["TradeResult"] = np.where(filtered["Sim_Result"] == 1, "Win", "Loss")
+                total = len(filtered)
+                wins = (filtered["TradeResult"] == "Win").sum()
+                losses = (filtered["TradeResult"] == "Loss").sum()
+
+                # Streak counters
+                streaks = filtered["TradeResult"].tolist()
+                current_win = current_loss = max_win = max_loss = win_streak = loss_streak = 0
+                win_runs = []
+                loss_runs = []
+
+                for result in streaks:
+                    if result == "Win":
+                        current_loss = 0
+                        win_streak += 1
+                        max_win = max(max_win, win_streak)
+                        current_win = win_streak
+                        if loss_streak:
+                            loss_runs.append(loss_streak)
+                            loss_streak = 0
+                    else:
+                        current_win = 0
+                        loss_streak += 1
+                        max_loss = max(max_loss, loss_streak)
+                        current_loss = loss_streak
+                        if win_streak:
+                            win_runs.append(win_streak)
+                            win_streak = 0
+
+                avg_win = round(np.mean(win_runs), 1) if win_runs else 0
+                avg_loss = round(np.mean(loss_runs), 1) if loss_runs else 0
+
+                # Volatility + Duration shift
+                insight = []
+                if row["MAE Change (%)"] > 0: insight.append(f"MAE up {row['MAE Change (%)']:+.1f}%")
+                if row["Range% Change (%)"] < 0: insight.append(f"Range down {row['Range% Change (%)']:+.1f}%")
+                if row["Duration Change (%)"] > 0: insight.append(f"Duration up {row['Duration Change (%)']:+.1f}%")
+
+                # DCA suitability: low range + high MAE = poor fit
+                dca_friendly = "Yes" if row["Range% Change (%)"] > 0 and row["MAE Change (%)"] <= 0 else "No"
+
+                summaries.append({
+                    "DayOfWeek": day, "Confidence": label,
+                    "Wins": wins, "Losses": losses, "Total": total,
+                    "WinStreak": current_win, "LossStreak": current_loss,
+                    "MaxWin": max_win, "MaxLoss": max_loss,
+                    "AvgWin": avg_win, "AvgLoss": avg_loss,
+                    "DCA Friendly": dca_friendly,
+                    "Volatility Insight": "; ".join(insight) if insight else "Stable"
+                })
+
+            st.subheader("🧠 Trader Assistant – MAE Strategy")
+            for row in summaries:
                 st.markdown(
-                    f"- **{row['DayOfWeek']} {label}** → Optimal stop at `{row['MAE_Stop']:.2f}%`, "
-                    f"SR `{row['Strike Rate (%)']:.1f}%`, R:R `{row['R:R']:.2f}`, EV `{row['Expectancy']:.2f}` | "
-                    f"Volatility shift: MAE `{row['MAE Change (%)']:+.1f}%`, Range `{row['Range% Change (%)']:+.1f}%`, Duration `{row['Duration Change (%)']:+.1f}%`."
+                    f"**{row['DayOfWeek']} – {row['Confidence']}**  \n"
+                    f"Optimal Stop: `{mae_df.loc[mae_df['DayOfWeek'] == row['DayOfWeek'], 'MAE_Stop'].values[0]:.2f}%` "
+                    f"→ SR: `{mae_df.loc[mae_df['DayOfWeek'] == row['DayOfWeek'], 'Strike Rate (%)'].values[0]:.1f}%`, "
+                    f"R:R: `{mae_df.loc[mae_df['DayOfWeek'] == row['DayOfWeek'], 'R:R'].values[0]:.2f}`, "
+                    f"EV: `{mae_df.loc[mae_df['DayOfWeek'] == row['DayOfWeek'], 'Expectancy'].values[0]:.2f}`  \n"
+                    f"{row['Volatility Insight']}  \n"
+                    f"Recent: {row['Total']} trades → Wins: {row['Wins']}, Losses: {row['Losses']} | "
+                    f"WinStreak: {row['WinStreak']}, Max: {row['MaxWin']}, LossStreak: {row['LossStreak']}  \n"
+                    f"DCA Friendly: {row['DCA Friendly']}"
                 )
 
             st.subheader("📊 Optimized MAE Summary")
             st.dataframe(mae_df, use_container_width=True)
 
-            st.subheader("📉 MAE Distribution")
-            df_recent = filter_last_n(df, num_trades)
-            fig = px.scatter(df_recent, x="Datetime", y="MAE", color="DayOfWeek", title="MAE Scatter Plot", height=600)
-            for level in [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4]:
-                fig.add_hline(y=level, line_dash="dash", line_color="gray", opacity=0.4)
+            st.subheader("📉 MAE Distribution (Last Trades per Day)")
+            fig = px.scatter(df_recent, x="Datetime", y="MAE", color="DayOfWeek", height=600,
+                             title="MAE Scatter Plot", category_orders={"DayOfWeek": ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]})
+            fig.update_traces(marker=dict(size=8, opacity=1))
             st.plotly_chart(fig, use_container_width=True)
+# ----- END SECTION: MAE Strategy -----
 
-        # === MFE Strategy ===
         elif strategy == "MFE Strategy (Fixed 0.3% MAE)":
             st.subheader("🟦 MFE Strategy: Target Optimization (0.3% MAE Stop)")
-            df_fixed = df[df["MAE"] <= 0.3]
-            mfe_levels = np.round(np.arange(0.01, 0.31, 0.01), 3)
+
+            with st.expander("📘 Strategy Logic & Metrics"):
+                st.markdown("""
+This module identifies the most profitable take-profit (MFE) targets for trades with a fixed 0.3% stop.
+
+- Only trades that hit TP **and stayed within** 0.3% MAE are considered.
+- The bot tests MFE targets from 0.01% to 0.30% and selects the best by **Expectancy**.
+
+**Metrics**:
+- **Hit Rate** = % of trades hitting the target
+- **R:R** = MFE Target ÷ 0.3
+- **Expectancy** = (Hit Rate × R:R) − (1 − Hit Rate)
+- **TP Speed** = Minutes to reach TP
+- **Entry Edge** = Proximity of entry to range edge
+- **Confidence**: Core Setup / Watchlist / Risky
+""")
+
+            df_fixed = df[(df["MAE"] <= 0.3) & (df["Hit"] == 1)].copy()
+            df_fixed["Hit_dt"] = pd.to_datetime(df_fixed["Hit_dt"])
+            df_fixed["TP_Minutes"] = (df_fixed["Hit_dt"] - df_fixed["Datetime"]).dt.total_seconds() / 60
+            df_fixed["Direction"] = np.where(df_fixed["BreakoutDirection"] == "High", "Short", "Long")
+            df_fixed["EntryEdge"] = np.where(
+                df_fixed["Direction"] == "Short",
+                (df_fixed["BreakoutClose"] - df_fixed["Range_High"]) / df_fixed["BreakoutClose"],
+                (df_fixed["Range_Low"] - df_fixed["BreakoutClose"]) / df_fixed["BreakoutClose"]
+            ) * 100
+
+            mfe_steps = np.round(np.arange(0.01, 0.31, 0.01), 3)
             results = []
 
-            for day, group in df_fixed.groupby("DayOfWeek"):
-                best_row = None
-                best_ev = -999
-                valid = group[group["Hit"] == 1]
-                for mfe in mfe_levels:
-                    hit_rate = (valid["MFE"] >= mfe).sum() / len(valid) if len(valid) else 0
+            for day in ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]:
+                group = df_fixed[df_fixed["DayOfWeek"] == day]
+                if group.empty: continue
+
+                best_ev, best_row = -999, None
+                for mfe in mfe_steps:
+                    hits = (group["MFE"] >= mfe).sum()
+                    total = len(group)
+                    hr = hits / total if total else 0
                     rr = mfe / 0.3
-                    ev = hit_rate * rr - (1 - hit_rate)
+                    ev = hr * rr - (1 - hr)
                     if ev > best_ev:
                         best_row = {
-                            "DayOfWeek": day, "MFE_Target": mfe,
-                            "Hit Rate (%)": round(hit_rate * 100, 2),
-                            "R:R": round(rr, 2), "Expectancy": round(ev, 4),
-                            "Trades": len(valid)
+                            "DayOfWeek": day,
+                            "MFE_Target": mfe,
+                            "Hit Rate (%)": round(hr * 100, 2),
+                            "R:R": round(rr, 2),
+                            "Expectancy": round(ev, 4),
+                            "Trades": total,
+                            "TP Speed (min)": round(group["TP_Minutes"].mean(), 1),
+                            "Entry Edge (%)": round(group["EntryEdge"].abs().mean(), 3)
                         }
                         best_ev = ev
-                if best_row: results.append(best_row)
+                if best_row:
+                    results.append(best_row)
 
             mfe_df = pd.DataFrame(results)
 
-            st.subheader("🧠 Trader’s Assistance (MFE Strategy)")
+            # Confidence label
+            def confidence_label(row):
+                score = 0
+                if row["Hit Rate (%)"] >= 75: score += 1
+                if row["Expectancy"] >= 0.1: score += 1
+                return {2: "Core Setup", 1: "Watchlist", 0: "Risky"}[score]
+
+            mfe_df["Confidence"] = mfe_df.apply(confidence_label, axis=1)
+
+            # Win/loss streaks
+            def compute_streaks(group, target):
+                streaks = []
+                curr = []
+                for val in (group["MFE"] >= target).astype(int):
+                    if not curr or curr[-1] == val:
+                        curr.append(val)
+                    else:
+                        streaks.append((curr[0], len(curr)))
+                        curr = [val]
+                if curr:
+                    streaks.append((curr[0], len(curr)))
+                wins = sum(1 for s in streaks if s[0] == 1)
+                losses = sum(1 for s in streaks if s[0] == 0)
+                win_lengths = [s[1] for s in streaks if s[0] == 1]
+                loss_lengths = [s[1] for s in streaks if s[0] == 0]
+                return {
+                    "Wins": sum(group["MFE"] >= target),
+                    "Losses": len(group) - sum(group["MFE"] >= target),
+                    "Current Win Streak": streaks[-1][1] if streaks and streaks[-1][0] == 1 else 0,
+                    "Current Loss Streak": streaks[-1][1] if streaks and streaks[-1][0] == 0 else 0,
+                    "Max Win Streak": max(win_lengths) if win_lengths else 0,
+                    "Avg Win Streak": round(np.mean(win_lengths), 1) if win_lengths else 0,
+                    "Max Loss Streak": max(loss_lengths) if loss_lengths else 0,
+                    "Avg Loss Streak": round(np.mean(loss_lengths), 1) if loss_lengths else 0,
+                    "Total Trades": len(group)
+                }
+
+            streak_metrics = []
             for _, row in mfe_df.iterrows():
+                group = df_fixed[df_fixed["DayOfWeek"] == row["DayOfWeek"]]
+                streak_metrics.append(compute_streaks(group, row["MFE_Target"]))
+
+            final_mfe = pd.concat([mfe_df.reset_index(drop=True), pd.DataFrame(streak_metrics)], axis=1)
+
+            # ----- Trader Assistant -----
+            st.subheader("🧠 Trader Assistant")
+            for _, row in final_mfe.iterrows():
+                tag = row["Confidence"]
                 st.markdown(
-                    f"- **{row['DayOfWeek']}** → Optimal MFE Target: `{row['MFE_Target']:.2f}` "
-                    f"→ SR `{row['Hit Rate (%)']:.1f}%`, R:R `{row['R:R']:.2f}`, EV `{row['Expectancy']:.2f}` "
-                    f"from `{row['Trades']}` qualifying trades."
+                    f"**{row['DayOfWeek']} – {tag}**  \n"
+                    f"Target: `{row['MFE_Target']:.2f}%` → Hit Rate: `{row['Hit Rate (%)']:.1f}%`, "
+                    f"R:R: `{row['R:R']:.2f}`, EV: `{row['Expectancy']:.2f}`  \n"
+                    f"TP Speed: `{row['TP Speed (min)']}` min | Entry Edge: `{row['Entry Edge (%)']:.2f}%`  \n"
+                    f"Recent: {row['Total Trades']} trades → {row['Wins']} Wins / {row['Losses']} Losses | "
+                    f"WinStreak: {row['Current Win Streak']}, Max: {row['Max Win Streak']}, "
+                    f"LossStreak: {row['Current Loss Streak']}"
                 )
 
-            st.subheader("📊 MFE Target Summary")
-            st.dataframe(mfe_df, use_container_width=True)
+            # ----- Final Combined Table -----
+            st.subheader("📊 MFE Strategy Summary")
+            display_cols = [
+                "DayOfWeek", "Confidence", "MFE_Target", "Hit Rate (%)", "R:R", "Expectancy",
+                "TP Speed (min)", "Entry Edge (%)", "Wins", "Losses", "Current Win Streak", "Current Loss Streak",
+                "Max Win Streak", "Max Loss Streak", "Avg Win Streak", "Avg Loss Streak", "Total Trades"
+            ]
+            st.dataframe(final_mfe[display_cols].set_index("DayOfWeek"), use_container_width=True)
 
-            st.subheader("📈 MFE Distribution")
-            df_mfe_recent = filter_last_n(df_fixed, num_trades)
-            fig2 = px.scatter(df_mfe_recent, x="Datetime", y="MFE", color="DayOfWeek", title="MFE Scatter Plot", height=600)
-            for level in [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4]:
-                fig2.add_hline(y=level, line_dash="dash", line_color="gray", opacity=0.4)
+            # ----- MFE Scatter Plot -----
+            st.subheader("📈 MFE Distribution (Last Trades per Day)")
+            df_mfe_recent = filter_last_n_per_day(df_fixed, num_trades)
+            fig2 = px.scatter(
+                df_mfe_recent, x="Datetime", y="MFE", color="DayOfWeek",
+                title="MFE Scatter Plot", height=600,
+                category_orders={"DayOfWeek": ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]}
+            )
+            fig2.update_traces(marker=dict(size=8, opacity=1))
             st.plotly_chart(fig2, use_container_width=True)
-# -----end section 3 - Backtest Analyzer (MAE/MFE Strategy) -----
