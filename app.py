@@ -322,7 +322,7 @@ elif dashboard_page == "Backtest Analyzer":
                     rr = df_day["RangePercentage"].mean() / stop if stop > 0 else 0
                     ev = sr * rr - (1 - sr)
 
-                    if sr >= 0.75:
+                    if sr >= 0.68:
                         candidate = {
                             "Day": day,
                             "Stop %": round(stop, 3),
@@ -346,7 +346,7 @@ elif dashboard_page == "Backtest Analyzer":
                     dur = df_day["Duration"].mean()
                     eff = calculate_efficiency(rng, mae)
                     tier = assign_volatility_tier(mae, rng, dur)
-                    label = "Core Setup" if float(best_row["StrikeRate"].strip('%')) >= 75 and best_row["EV"] > 0 else "Watchlist"
+                    label = "Core Setup" if float(best_row["StrikeRate"].strip('%')) >= 68 and best_row["EV"] > 0 else "Watchlist"
                 else:
                     best_row = {
                         "Day": day,
@@ -371,18 +371,6 @@ elif dashboard_page == "Backtest Analyzer":
 
             df_summary = pd.DataFrame(summary_rows).sort_values("Day", key=lambda x: pd.Categorical(x, categories=ordered_days, ordered=True))
 
-            # Trader Assistant
-            st.markdown("### 🧠 Trader Assistant – MAE Strategy")
-            for _, row in df_summary.iterrows():
-                st.markdown(
-                    f"**{row['Confidence']} – {row['Day']}**  \n"
-                    f"Stop: `{row['Stop %']}%` | SR: `{row['StrikeRate']}`, R:R: `{row['RR']}`, EV: `{row['EV']}`  \n"
-                    f"Volatility: `{row['Volatility']}` | Efficiency: `{row['Efficiency']}`  \n"
-                    f"Wins: `{row['Current Win Streak']}` | Losses: `{row['Current Loss Streak']}` | "
-                    f"Max Win: `{row['Max Win Streak']}` | Max Loss: `{row['Max Loss Streak']}`  \n"
-                    f"Avg Win: `{row['Avg Win Streak']}` | Avg Loss: `{row['Avg Loss Streak']}`  \n"
-                    f"Sample: `{row['Total Trades']}` trades"
-                )
 
             # Summary table
             st.markdown("### 📋 MAE Strategy Summary")
@@ -421,8 +409,13 @@ elif dashboard_page == "Backtest Analyzer":
 
                 total = len(df_day)
 
+                # Stopped trades: those that exceeded 0.3% MAE
                 df_day["Stopped"] = df_day["MAE"] > 0.3
+
+                # MFE Target: towards opposite side of range
                 df_day["TP_Hit"] = df_day["MFE"] >= df_day["RangePercentage"]
+                
+                # Qualified trades are those that didn't stop out and hit target
                 df_day["Qualified"] = (~df_day["Stopped"]) & (df_day["TP_Hit"])
                 df_day["ResultSim"] = df_day["Qualified"].astype(int)
 
@@ -433,6 +426,7 @@ elif dashboard_page == "Backtest Analyzer":
                 dur = df_day["Duration"].mean()
                 eff = calculate_efficiency(rng, 0.3)
 
+                # Calculate edge distance if range boundaries are provided
                 if "Range_High" in df_day.columns and "Range_Low" in df_day.columns:
                     edge = np.abs(df_day["BreakoutClose"] - np.where(
                         df_day["BreakoutDirection"] == "Long",
@@ -445,7 +439,7 @@ elif dashboard_page == "Backtest Analyzer":
 
                 streaks = get_streaks(df_day["ResultSim"])
                 tier = assign_volatility_tier(mae, rng, dur)
-                label = "Core Setup" if sr >= 0.75 else "Watchlist" if sr >= 0.7 else "Risky"
+                label = "Core Setup" if sr >= 0.68 else "Watchlist" if sr >= 0.7 else "Risky"
 
                 summary_rows.append({
                     "Day": day,
@@ -462,21 +456,8 @@ elif dashboard_page == "Backtest Analyzer":
                     "Total Trades": total
                 })
 
+            # Sort summary rows based on ordered weekday sequence
             df_summary = pd.DataFrame(summary_rows).sort_values("Day", key=lambda x: pd.Categorical(x, categories=ordered_days, ordered=True))
-
-            # Trader Assistant
-            st.markdown("### 🧠 Trader Assistant – MFE Strategy")
-            for _, row in df_summary.iterrows():
-                st.markdown(
-                    f"**{row['Confidence']} – {row['Day']}**  \n"
-                    f"Target: `{row['Target %']}%` | SR: `{row['StrikeRate']}` | R:R: `{row['RR']}` | EV: `{row['EV']}`  \n"
-                    f"Volatility: `{row['Volatility']}` | Efficiency: `{row['Efficiency']}`  \n"
-                    f"TP Speed: `{row['TP Speed']}` | Entry Edge: `{row['Entry Edge']}`  \n"
-                    f"Wins: `{row['Current Win Streak']}` | Losses: `{row['Current Loss Streak']}` | "
-                    f"Max Win: `{row['Max Win Streak']}` | Max Loss: `{row['Max Loss Streak']}`  \n"
-                    f"Avg Win: `{row['Avg Win Streak']}` | Avg Loss: `{row['Avg Loss Streak']}`  \n"
-                    f"Sample: `{row['Total Trades']}` trades"
-                )
 
             # Summary table
             st.markdown("### 📋 MFE Strategy Summary")
@@ -499,3 +480,5 @@ elif dashboard_page == "Backtest Analyzer":
             fig.update_traces(marker=dict(size=8, opacity=1.0))
             fig.update_layout(legend_title_text="Weekday", legend=dict(itemsizing="constant"))
             st.plotly_chart(fig, use_container_width=True)
+
+# ----- END SECTION: MFE STRATEGY -----
