@@ -13,72 +13,53 @@ dashboard_page = st.sidebar.radio("Go to:", ["Range Finder", "Backtest Analyzer"
 
 # ----- START SECTION: RANGE FINDER -----
 if dashboard_page == "Range Finder":
-    st.header("📊 Range Finder")
+    st.header("Range Finder")
 
-    # --- 2.1 Bulk Upload Block ---
-    st.sidebar.markdown("### 📂 Upload")
+    # --- Upload ---
+    st.sidebar.markdown("### Upload")
     st.sidebar.markdown("CSVs : `XYZ GC_6M.csv`")
     bulk_files = st.sidebar.file_uploader(
         "Upload CSVs", type="csv", accept_multiple_files=True, key="bulk_upload"
     )
 
-    # --- 2.2 Filters ---
-    st.subheader("🔍 Filters")
-    col1, col2 = st.columns(2)
+    # --- Filters ---
+    
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         min_strike = st.number_input("Min Strike Rate", min_value=0, max_value=100, value=75)
 
     with col2:
+        min_mae_survival = st.number_input("Min MAE Survival %", min_value=0, max_value=100, value=50, step=5)
+
+    with col3:
+        min_rr = st.number_input("Min RR", min_value=1.0, max_value=5.0, value=1.5, step=0.1)
+
+    with col4:
         max_stdev = st.number_input("Max Strike Rate Deviation (Stdev)", min_value=0.0, max_value=10.0, value=5.0, step=0.1)
 
-    setup_health_radio = st.radio(
-        "Setup Health",
-        ["All", "✅ Core Setup", "⚠️ Watch List", "❌ Decaying"],
-        index=0,
-        horizontal=True
-    )
+    show_individual = st.checkbox("Show Individual Playbook", value=False)
+    show_expanders = st.checkbox("Show Range Details", value=False)
 
-    if setup_health_radio == "All":
-        setup_health_filter = ["✅ Core Setup", "⚠️ Watch List", "❌ Decaying"]
-    else:
-        setup_health_filter = [setup_health_radio]
+    # --- Tooltip ---
+    with st.expander("Range Finder Insights & Logic", expanded=False):
+        st.markdown(f"""
+- **Weighted Metrics**
+  - **Strike** is recency-weighted across 1M, 3M, 6M, and 1Y — with **greater weight on long-term consistency** to favor historically stable setups.
+  - **MAE, MFE, Range %, and Avg Duration** use the opposite weighting — with **greater emphasis on recent performance** to reflect current price behavior.
 
-    # --- 2.3 Metric Definitions ---
-    with st.expander("📘 Column Definitions & Calculation Logic", expanded=False):
-        st.markdown("""### **Metric Logic Overview**
+- **Best Stop Selection**
+  The system evaluates all MAE tiers (0.075, 0.15, 0.225, 0.3) and selects the tightest stop that:
+  - Meets your minimum MAE survival %
+  - Delivers RR ≥ your global target
+  - Falls below the max stop allowed based on available MFE
 
-- **Strike**  
-  Recency-weighted average of strike rate across 1Y, 6M, 3M, and 1M. Emphasizes long-term consistency while giving weight to recent data.
+- **Valid Stops (DCA Mode)**
+  Instead of showing just one Best Stop, the dashboard surfaces all qualified stops per row. This helps you plan entries for DCA-style execution and understand the risk/survival tradeoff.
 
-- **MAE / MFE**  
-  Recency-weighted average of Maximum Adverse Excursion (MAE) and Maximum Favorable Excursion (MFE), representing average drawdown and run-up per setup.
+""")
 
-- **Range %**  
-  Weighted average of price range (as % of price) for each setup window, favoring recent time periods.
-
-- **MFE/MAE**  
-  Reward-to-risk ratio. A higher value means the setup tends to deliver more reward relative to its risk.
-
-- **Range/MAE (Base Hit Ratio)**  
-  Measures how efficiently price reverts to the otherside of the range. Higher values suggest stronger mean-reverting behavior.
-
-- **Avg Duration**  
-  Recency-weighted average time the setup lasts, formatted as `1h 12m`, `43m`, etc.
-
-- **Strike Decay**  
-  Difference between 1M and 1Y strike rate (`1M - 1Y`). A positive value indicates improving recent performance.
-
-- **Strike Stdev**  
-  Standard deviation of the strike rates across all timeframes. Lower values suggest more consistent historical performance.
-
-- **Setup Health**  
-  Combines Strike Decay + Stdev to classify setups:
-  - ✅ Core Setup: Strike is improving and stable (low stdev)
-  - ⚠️ Watch List: Improving strike, but inconsistent
-  - ❌ Decaying: Strike performance is declining
-        """)
-
+    # --- Load and Combine CSVs ---
     instrument_data = {}
     combined = []
 
@@ -101,15 +82,13 @@ if dashboard_page == "Range Finder":
                         instrument_data[instrument] = {}
                     instrument_data[instrument][tf_label] = df
 
-    # Sidebar Summary of Uploaded Files
     if instrument_data:
-        st.sidebar.markdown("### 📁 Uploaded Files")
+        st.sidebar.markdown("### Uploaded Files")
         for inst, timeframes in instrument_data.items():
             tf_list = sorted(timeframes.keys(), key=lambda x: ["1 Month", "3 Months", "6 Months", "1 Year"].index(x))
             compact_tf = ", ".join([tf.split()[0] for tf in tf_list])
             st.sidebar.markdown(f"**{inst}**  • {compact_tf}")
 
-    # ----- Core Processing + Summary Display -----
     if instrument_data:
         for instrument, data in instrument_data.items():
             if all(tf in data for tf in expected_timeframes):
@@ -139,77 +118,146 @@ if dashboard_page == "Range Finder":
                 df["MFE"] = sum(df[f"MFE_{k}"] * w for k, w in w_recent.items())
                 df["Range %"] = sum(df[f"Range_{k}"] * w for k, w in w_recent.items())
                 df["Avg Duration"] = sum(df[f"Duration_{k}"] * w for k, w in w_recent.items())
-
                 df["MFE/MAE"] = df["MFE"] / df["MAE"]
                 df["Range/MAE"] = df["Range %"] / df["MAE"]
-
                 df["Strike_Stdev"] = df[[f"Strike_{k}" for k in w_strike]].std(axis=1)
                 df["Strike_Decay"] = df["Strike_1M"] - df["Strike_1Y"]
 
                 def classify_setup(decay, stdev):
                     if decay > 0 and stdev <= max_stdev:
-                        return "✅ Core Setup"
+                        return "Core Setup"
                     elif decay > 0:
-                        return "⚠️ Watch List"
+                        return "Watch List"
                     else:
-                        return "❌ Decaying"
+                        return "Decaying"
 
                 df["Setup Health"] = df.apply(lambda row: classify_setup(row["Strike_Decay"], row["Strike_Stdev"]), axis=1)
+
+                df.rename(columns={
+                    "MAE1": "MAE_0.3", "MAE2": "MAE_0.225",
+                    "MAE3": "MAE_0.15", "MAEs": "MAE_0.075"
+                }, inplace=True)
+
+                def collect_valid_stops(row):
+                    if row["Strike"] < (min_strike / 100):
+                        return "Strike < Min"
+                    valid = []
+                    for threshold, hit_col in [
+                        (0.075, "MAE_0.075"),
+                        (0.15, "MAE_0.15"),
+                        (0.225, "MAE_0.225"),
+                        (0.3, "MAE_0.3")
+                    ]:
+                        hit = row.get(hit_col, 0)
+                        rr = row["MFE"] / threshold if threshold > 0 else 0
+                        if (
+                            hit * 100 >= min_mae_survival and
+                            rr >= min_rr and
+                            threshold <= row["MFE"] / min_rr
+                        ):
+                            valid.append(f"{threshold:.3f} (RR={rr:.2f}, {hit*100:.0f}%)")
+                    return " | ".join(valid) if valid else "No valid stop"
+
+                def format_mae_tiers(row):
+                    return f"0.075: {row['MAE_0.075']:.0%} | 0.15: {row['MAE_0.15']:.0%} | 0.225: {row['MAE_0.225']:.0%}"
+
+                df["Valid Stops"] = df.apply(collect_valid_stops, axis=1)
+                df["MAE Tiers"] = df.apply(format_mae_tiers, axis=1)
                 df["Instrument"] = instrument
                 combined.append(df)
 
     if combined:
         final_df = pd.concat(combined).reset_index(drop=True)
 
-        # Filter and clean
-        filtered = final_df[final_df["Strike"] >= min_strike]
-        filtered = filtered[filtered["Setup Health"].isin(setup_health_filter)]
-        filtered = filtered[filtered["Strike_Stdev"] <= max_stdev]
-        filtered = filtered[
-            ~filtered["Instrument"].astype(str).str.strip().str.lower().eq("totals") &
-            ~filtered["DayOfWeek"].astype(str).str.strip().str.lower().eq("totals")
+        filtered = final_df[
+            (final_df["Strike"] >= min_strike) &
+            (final_df["Setup Health"] == "Core Setup") &
+            (final_df["Strike_Stdev"] <= max_stdev) &
+            (final_df["Valid Stops"].str.contains("RR=")) &
+            (~final_df["Instrument"].astype(str).str.strip().str.lower().eq("totals")) &
+            (~final_df["DayOfWeek"].astype(str).str.strip().str.lower().eq("totals"))
         ]
 
-        def format_duration(minutes):
-            h = int(minutes) // 60
-            m = int(minutes) % 60
-            return f"{h}h {m}m" if h else f"{m}m"
+        # Cache filtered table for Backtester access
+        st.session_state["range_finder_table"] = filtered.copy()
 
-        # Format and center display
         display_cols = [
             "Instrument", "DayOfWeek", "RangeStart", "RangeEnd",
-            "Strike", "MFE", "MAE", "Range %", "Range/MAE", "MFE/MAE",
-            "Avg Duration", "Setup Health"
+            "Strike", "MAE Tiers", "Valid Stops", "Range %", "Range/MAE", "Avg Duration"
         ]
-        numeric_cols = ["Strike", "MFE", "MAE", "Range %", "Range/MAE", "MFE/MAE"]
+        numeric_cols = ["Strike", "Range %", "Range/MAE"]
 
         rounded = filtered[display_cols].copy()
         for col in numeric_cols:
             rounded[col] = rounded[col].apply(lambda x: f"{x:.2f}")
-        rounded["Avg Duration"] = filtered["Avg Duration"].apply(format_duration)
+        rounded["Avg Duration"] = filtered["Avg Duration"].apply(
+            lambda m: f"{int(m)//60}h {int(m)%60}m" if m >= 60 else f"{int(m)}m"
+        )
 
-        # Combined Table
-        st.markdown("### 📊 Combined Playbook ")
-        st.dataframe(rounded.style.set_properties(**{"text-align": "center"}), use_container_width=True)
+        st.markdown("### Combined Playbook")
+        st.dataframe(rounded, use_container_width=True)
 
-        # Per Instrument
-        st.markdown("### 📈 Individual Playbook")
-        for inst in filtered["Instrument"].unique():
-            inst_df = filtered[filtered["Instrument"] == inst]
-            inst_rounded = inst_df[display_cols].copy()
-            for col in numeric_cols:
-                inst_rounded[col] = inst_rounded[col].apply(lambda x: f"{x:.2f}")
-            inst_rounded["Avg Duration"] = inst_df["Avg Duration"].apply(format_duration)
-            st.markdown(f"#### {inst}")
-            st.dataframe(inst_rounded.style.set_properties(**{"text-align": "center"}), use_container_width=True)
+        if show_individual:
+            st.markdown("### Individual Playbook")
+            for inst in filtered["Instrument"].unique():
+                inst_df = filtered[filtered["Instrument"] == inst]
+                inst_rounded = inst_df[display_cols].copy()
+                for col in numeric_cols:
+                    inst_rounded[col] = inst_rounded[col].apply(lambda x: f"{x:.2f}")
+                inst_rounded["Avg Duration"] = inst_df["Avg Duration"].apply(
+                    lambda m: f"{int(m)//60}h {int(m)%60}m" if m >= 60 else f"{int(m)}m"
+                )
+                st.markdown(f"#### {inst}")
+                st.dataframe(inst_rounded, use_container_width=True)
 
+        if show_expanders:
+            st.markdown("### Range Details")
+            for _, row in filtered.iterrows():
+                with st.expander(f"{row['Instrument']} • {row['DayOfWeek']} • {row['RangeStart']}–{row['RangeEnd']}"):
+                    st.markdown(f"""
+- **Strike:** {row['Strike']:.2f}
+- **Valid Stops:** {row['Valid Stops']}
+- **Avg Duration:** {int(row['Avg Duration'])//60}h {int(row['Avg Duration'])%60}m
+
+**MAE Survival Rates:**  
+{row['MAE Tiers']}
+
+**Excursion Metrics:**  
+- MFE: `{row['MFE']:.3f}`  
+- MAE: `{row['MAE']:.3f}`  
+- Range %: `{row['Range %']:.3f}`  
+- MFE/MAE: `{row['MFE/MAE']:.2f}`  
+- Range/MAE: `{row['Range/MAE']:.2f}`  
+- Setup Health: `{row['Setup Health']}`
+""")
     else:
-        st.info("📥 Please upload all 4 time periods for at least one instrument to begin analysis.")
+        st.info("Please upload all 4 time periods for at least one instrument to begin analysis.")
+
+
 # ----- END SECTION: RANGE FINDER -----
 
 # ----- BACKTEST ANALYZER SECTION -----
 elif dashboard_page == "Backtest Analyzer":
     st.header("📈 Backtest Analyzer")
+
+    # Reference Range Finder Table (if available)
+    if "range_finder_table" in st.session_state:
+        st.subheader("Reference: Range Finder Table")
+
+        reference_cols = [
+            "Instrument", "DayOfWeek", "RangeStart", "RangeEnd",
+            "Strike", "MAE Tiers", "Valid Stops", "Range %", "Range/MAE", "Avg Duration"
+        ]
+        table = st.session_state["range_finder_table"].copy()
+        numeric_cols = ["Strike", "Range %", "Range/MAE"]
+
+        for col in numeric_cols:
+            table[col] = table[col].apply(lambda x: f"{x:.2f}")
+        table["Avg Duration"] = table["Avg Duration"].apply(
+            lambda m: f"{int(m)//60}h {int(m)%60}m" if m >= 60 else f"{int(m)}m"
+        )
+
+        st.dataframe(table[reference_cols], use_container_width=True)
 
     uploaded_files = st.sidebar.file_uploader(
         "Upload Backtest CSVs", type="csv", accept_multiple_files=True, key="backtest_upload"
@@ -299,11 +347,9 @@ elif dashboard_page == "Backtest Analyzer":
 
 
 
-
-
 # ----- START SECTION: MAE STRATEGY -----
         if strategy == "MAE Optimizer":
-            st.markdown("## 🛡️ MAE Strategy – Base-Hit Optimizer")
+        
 
             summary_rows = []
             ordered_days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
@@ -373,11 +419,11 @@ elif dashboard_page == "Backtest Analyzer":
 
 
             # Summary table
-            st.markdown("### 📋 MAE Strategy Summary")
+            st.markdown("### MAE Strategy Summary")
             st.dataframe(df_summary.set_index("Day"), use_container_width=True)
 
             # MAE Plotly Scatter
-            st.markdown("### 📈 MAE Distribution")
+            st.markdown("### MAE Distribution")
             mae_plot_data = recent[recent["DayOfWeek"].isin(df_summary["Day"])]
 
             fig = px.scatter(
@@ -397,7 +443,7 @@ elif dashboard_page == "Backtest Analyzer":
 
 # ----- START SECTION: MFE STRATEGY -----
         elif strategy == "MFE Strategy":
-            st.markdown("## 🎯 MFE Strategy – Target Zone Analyzer")
+            st.markdown("## MFE Strategy – Target Zone Analyzer")
 
             summary_rows = []
             ordered_days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
@@ -460,11 +506,11 @@ elif dashboard_page == "Backtest Analyzer":
             df_summary = pd.DataFrame(summary_rows).sort_values("Day", key=lambda x: pd.Categorical(x, categories=ordered_days, ordered=True))
 
             # Summary table
-            st.markdown("### 📋 MFE Strategy Summary")
+            st.markdown("### MFE Strategy Summary")
             st.dataframe(df_summary.set_index("Day"), use_container_width=True)
 
             # MFE Plotly Scatter
-            st.markdown("### 📈 MFE Distribution")
+            st.markdown("### MFE Distribution")
             mfe_plot_data = recent[recent["DayOfWeek"].isin(df_summary["Day"])]
 
             fig = px.scatter(
